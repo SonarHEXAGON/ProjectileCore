@@ -117,7 +117,7 @@ task.delay(0.2, function()
 end);
 ```
 
-Do not call runtime APIs with the projectile name unless the API specifically expects a projectile definition name. `"Soul_Fireball"` is the registered type; `Identifier` is the specific live shot. Yes, this one has bitten people. No, we are not naming names.
+Do not call runtime APIs with the projectile name unless the API specifically expects a projectile definition name. `"Soul_Fireball"` is the registered type; `Identifier` is the specific live shot.
 
 ## RegisterProjectile
 
@@ -293,7 +293,7 @@ ProjectileCore can keep effects disabled until the initial CFrame is valid, run 
 end;
 ```
 
-This runs after the projectile part has a valid initial CFrame but before the projectile is fired and before managed effects are enabled. This is the hook that prevents the classic "trail starts in Narnia" nonsense.
+This runs after the projectile part has a valid initial CFrame but before the projectile is fired and before managed effects are enabled.
 
 ## OnPartEnd
 
@@ -308,7 +308,7 @@ This runs after the projectile part has a valid initial CFrame but before the pr
 end;
 ```
 
-Use this for impact visual holds, shrink tweens, fade-outs, trail cleanup, or returning cached parts after a delay. Always call `Cleanup()` when done. Seriously. The cache cannot read minds.
+Use this for impact visual holds, shrink tweens, fade-outs, trail cleanup, or returning cached parts after a delay. Always call `Cleanup()` when done.
 
 ## HomingData
 
