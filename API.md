@@ -6,15 +6,6 @@ Long-form reference for ProjectileCore: registration, simulated projectiles, phy
 @SonarHEXAGON plz stop arguing with mr Blaj here - Reze
 > @SonarHEXAGON, @BlajahBean, and @RalziumQUANTUM somehow turned "make projectile go brr" into an entire ecosystem. This is fine.
 
-## Source-Sync Notes
-
-This documentation pass is docs-only. Most APIs below were verified against the current Studio `ProjectileCoreSystem` tree through MCP, including `CreateAreaController`, `SetControlImmunity`, `ControlImmunity`, `PhysicalCast` handler support, `OnPhysicalHit`, `AutoLifetime`, `Angles` visual handling, and time-stop cast skipping.
-
-Two items should be source-checked before merging this PR as final truth:
-
-- `SnapHitEnabled`, `SnapHitDistance`, and `SnapHitTime` were requested in the docs plan, but the current Studio grep did not expose those fields in the visible simulated source slice.
-- `Physical.Handler` exposes `OnPhysicalHit` and `PhysicalCast`; verify the root `SpawnPhysical` pass-through is synced in the repository source before relying on the public example. Tiny plumbing, large consequences. Classic.
-
 ## Require Path
 
 
