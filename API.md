@@ -2,16 +2,7 @@
 
 Long-form reference for ProjectileCore: registration, simulated projectiles, physical projectiles, homing, Bezier travel, deflection, attraction, area controllers, control immunity, networking, visual setup, and performance behavior.
 
-> @SonarHEXAGON, @BlajahBean, and @RalziumQUANTUM somehow turned "make projectile go brr" into an entire ecosystem. This is fine.
-
-## Source-Sync Notes
-
-This documentation pass is docs-only. Most APIs below were verified against the current Studio `ProjectileCoreSystem` tree through MCP, including `CreateAreaController`, `SetControlImmunity`, `ControlImmunity`, `PhysicalCast` handler support, `OnPhysicalHit`, `AutoLifetime`, `Angles` visual handling, and time-stop cast skipping.
-
-Two items should be source-checked before merging this PR as final truth:
-
-- `SnapHitEnabled`, `SnapHitDistance`, and `SnapHitTime` were requested in the docs plan, but the current Studio grep did not expose those fields in the visible simulated source slice.
-- `Physical.Handler` exposes `OnPhysicalHit` and `PhysicalCast`; verify the root `SpawnPhysical` pass-through is synced in the repository source before relying on the public example. Tiny plumbing, large consequences. Classic.
+This is fine.
 
 ## Require Path
 
@@ -51,7 +42,7 @@ Projectile presets normally live at:
 ProjectileCore.Objects.Projectiles.<ProjectileName>
 ```
 
-A preset can be a direct `BasePart`, a `Model` with `PrimaryPart`, or a `ModuleScript` returning projectile/cache data. Unless somebody shoved the template in a random folder and then asked why cache is nil. We do not speak of this.
+A preset can be a direct `BasePart`, a `Model` with `PrimaryPart`, or a `ModuleScript` returning projectile/cache data. Unless somebody shoved the template in a random folder and then asked why cache is nil.
 
 ## Core API
 
@@ -243,7 +234,7 @@ ProjectileCore.RegisterProjectile("PointBlankBolt", {
 | `SnapHitDistance` | `number` | `12` | Max studs for close-hit snap. |
 | `SnapHitTime` | `number` | `0.05` | Predicted travel window for the precheck. |
 
-Custom `CanPierce` projectiles should not use snap by default unless the source explicitly supports it, because pre-running user callbacks twice is how a simple optimization becomes haunted state.
+Custom `CanPierce` projectiles should not use snap by default unless the source explicitly supports it.
 
 ## EffectPolicy And PrepareProjectilePart
 
@@ -273,7 +264,7 @@ ProjectileCore can keep managed effects disabled until the initial CFrame/transf
 end;
 ```
 
-`PrepareProjectilePart` is the correct place to enable mesh/material/visibility setup. Do not manually enable trails at the template origin before ProjectileCore sets the first transform unless you want a trail line from Narnia.
+`PrepareProjectilePart` is the correct place to enable mesh/material/visibility setup. Do not manually enable trails at the template origin before ProjectileCore sets the first transform unless you want a trail line from Narnia or wtever.
 
 ## HomingData
 
@@ -438,7 +429,7 @@ ProjectileCore.DeflectArea({
 });
 ```
 
-Supported area shapes include `Sphere`, `Box`, `Cylinder`, `Disc`, `Cone`, `Pyramid`, `Capsule`, and `HalfSphere`. `Disc` is treated as a thin cylinder, not an infinitely thin math plane that makes physics cry.
+Supported area shapes include `Sphere`, `Box`, `Cylinder`, `Disc`, `Cone`, `Pyramid`, `Capsule`, and `HalfSphere`. FAR WARNING tho, `Disc` is treated as a thin cylinder, not an infinitely thin math plane that makes physics cry.
 
 | Setting | Description |
 | --- | --- |
