@@ -2,7 +2,7 @@
 
 > High-speed simulated projectiles, physical projectile control, homing, Bezier travel, area fields, deflection, attraction, and client visuals for CGP:R-style combat.
 
-ProjectileCore lets the server own real projectile truth while clients render something that does not look like it was dragged behind a truck. It supports bullets, lobbed blobs, cinematic Beziers, orbiting murder Frisbees, time-stop nonsense, physical debris, and the usual "why is this projectile doing forbidden geometry" edge cases.
+ProjectileCore lets the server own real projectile truth while clients render something that does not look like it was dragged behind a truck. It supports bullets, lobbed blobs, cinematic Beziers, orbiting murder Frisbees (Sword of Dimension joke attempt fail noob), time-stop nonsense, physical debris, and the usual "why is this projectile doing forbidden geometry" edge cases.
 
 ## Contributors
 
