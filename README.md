@@ -184,7 +184,7 @@ local Controller = ProjectileCore.CreateAreaController({
 });
 ```
 
-`Area` controls capture membership. `Shape` under Orbit/Tornado controls motion distribution. Do not swap those two unless you enjoy debugging invisible tornado math at 3 AM.
+`Area` controls capture membership. `Shape` under Orbit/Tornado controls motion distribution. Do not swap those two unless you enjoy debugging invisible tornado math at 3 AM like Polar did (Saturday was fun as shit)
 
 ## Control Immunity
 
@@ -216,7 +216,7 @@ ProjectileCore.RegisterProjectile("PointBlankBolt", {
 });
 ```
 
-If your current source tree does not expose these fields yet, sync the latest simulated snap patch before relying on this section. Yes, this is the boring warning. Boring warnings prevent spicy bugs.
+If your current source tree does not expose these fields yet, sync the latest simulated snap patch before relying on this section. Yes, this is the boring warning. 
 
 ## Bezier, Homing, And Angles
 
@@ -241,7 +241,7 @@ ProjectileCore.SpawnSimulated("MagicMissile", {
 });
 ```
 
-`Angles` is an orientation offset applied to the projectile facing direction, including homing visuals. Use it when a mesh's local forward axis is annoying, which is somehow every mesh when the deadline is close.
+`Angles` is an orientation offset applied to the projectile facing direction, including homing visuals. Use it when a mesh's local forward axis is annoying or wrong.
 
 ## Physical Projectiles
 
@@ -329,4 +329,4 @@ end);
 
 ## Full API Reference
 
-See [API.md](./API.md) for the full configuration reference, extended examples, AreaController fields, ControlImmunity rules, replication fields, Bezier settings, homing settings, patching rules, and the other stuff we keep adding because apparently projectiles are a lifestyle now.
+See [API.md](./API.md) for the full configuration reference, extended examples, AreaController fields, ControlImmunity rules, replication fields, Bezier settings, homing settings, patching rules, and the other stuff we keep adding because apparently projectiles are a lifestyle now + blame Polar for his constant deprecation of shi.
