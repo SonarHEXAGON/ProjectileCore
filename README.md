@@ -1,18 +1,8 @@
 # ProjectileCore
 
-> High-speed simulated projectiles, physical projectile control, homing, Bezier travel, area fields, deflection, attraction, and client visuals for CGP:R-style combat.
+ProjectileCore is the projectile system used in CGP:R. It separates server simulation from client visuals, with support for homing, Bezier paths, deflection, area controls, and registered physical projectiles.
 
-ProjectileCore lets the server own real projectile truth while clients render something that does not look like it was dragged behind a truck. Bullets, lobbed blobs, orbiting murder Frisbees, time-stop nonsense, and the usual "why is this projectile doing forbidden geometry" edge cases live here.
-
-**Documentation baseline: the integrated `ProjectileSystem_Test` implementation inspected on 30 October 2026.** This repository currently contains documentation, not the source modules or an installable release. The separately prepared standalone export is older and must be refreshed and validated before distribution. Reading the README does not summon its dependencies. We checked.
-
-## Contributors
-
-- **@BlajahBean** - Main programmer and mathematician. Occasionally fights the formatter and somehow still lands the math.
-- **@SonarHEXAGON** - Sub programmer, testing, live implementation, physical/projectile integration work, and helper for GitHub here.
-- **@RalziumQUANTUM** - Formatting, comments, and GitHub documentation creator. The grammar police arrived armed.
-- **@keklol0401010101010** - Creator of HomingCast.
-- **@23sinek345** - Creator of SwiftCast and helped with optimization questions.
+These docs cover the integrated `ProjectileSystem_Test` build checked on **30 October 2026**. The source and dependencies are not distributed in this repository yet. The older standalone export has not been brought up to date with this build.
 
 ## Contents
 
@@ -20,33 +10,26 @@ ProjectileCore lets the server own real projectile truth while clients render so
 - [Setup And Authority](#setup-and-authority)
 - [Server Gameplay Registration](#server-gameplay-registration)
 - [Client Visual Registration](#client-visual-registration)
-- [Prepare Before The Fight](#prepare-before-the-fight)
+- [Preparation](#preparation)
 - [API Map](#api-map)
 - [Performance And Security](#performance-and-security)
-- [Full Reference](./API.md)
+- [API Reference](./API.md)
+- [Contributors](#contributors)
 
 ## Features
 
-| System | Current capability |
-| --- | --- |
-| Simulation | Linear, accelerated, homing, quadratic/cubic Bezier; client cosmetic or server gameplay authority. |
-| World collision | Ray, sphere, block, or shapecast; separate living-humanoid sphere radius; close-hit snap; optional bouncing. |
-| Control | Direct/area deflection, configurable shields, one-shot attraction, and persistent Orbit, Tornado, Attract, Wind, FrozenMoment fields. |
-| Immunity | Per-projectile control immunity, separate from normal world collision and damage. |
-| Authoring | Centered Fan, Ring, Cone, and Sphere bursts; runtime-local projectile groups; atomic phase transitions. |
-| Curves | Effective-age or committed-distance speed, visual/collision scale, and named numeric values. Damage is still your job. |
-| Impacts | Optional authoritative contact snapshots and separate client-only embedded/following impact visuals. |
-| Visuals | Cached parts/Models, initial-placement warmup, managed effects, angular spin, optional distant particle/light budgets. |
-| Networking | Auto/ByteNet/SoNET, spatial relevance, shared encoding, byte-safe reliable batches/fragmentation, paced recovery, and inbound guards. |
-| Collision acceleration | Opt-in DDA/Bolt filtering with conservative native fallbacks and tracked dynamic occupancy. Native remains the default. |
-| Parallel runtime | Restricted experimental server worker lane. Auto promotion is currently disabled; this is not a "more Actors = more FPS" button. |
-| Diagnostics | Rolling timings, MicroProfiler labels, queues, cache misses, homing acquisition, controls, and cleanup counters. |
+- Linear and accelerated motion, homing, and quadratic/cubic Bezier travel.
+- Ray, sphere, block, and shape casts; optional bouncing and a separate living-humanoid sweep radius.
+- Deflection surfaces and area fields for Orbit, Tornado, Attract, Wind, and FrozenMoment, with per-projectile control immunity.
+- Burst patterns, projectile groups, phase transitions, and age/distance curves.
+- Cached client visuals, managed effects, angular spin, impact snapshots, and embedded impact attachments.
+- ByteNet/SoNET delivery with spatial relevance, shared encoding, bounded packets, and paced recovery.
 
-See the [API reference](./API.md) for defaults and limits. Features being present does not mean every combination is free, automatic, or certified on your toaster.
+Native collision is the default. DDA/Bolt and the experimental Actor runtime have [specific eligibility limits](./API.md#collision-backends-and-dynamic-occupancy); Actor Auto promotion is currently disabled.
 
 ## Setup And Authority
 
-For an existing installation of the integrated build, the usual root is:
+In the integrated build, the root module is located here:
 
 ```text
 ReplicatedStorage
@@ -63,18 +46,18 @@ ReplicatedStorage
           Projectiles
 ```
 
-This is a **location convention**, not a complete installer. The integrated build also references game-owned networking, utility, and humanoid dependencies. Copying one root script out of these docs is not installation. The older standalone package has different isolation/configuration rules; do not mix its instructions into this build.
+The examples below assume that build is already installed, including its game-specific networking, utility, and humanoid dependencies.
 
 Require the root on the server and each client. Register the same projectile name independently on both sides:
 
-- **Server:** movement, collision dimensions, allegiance/damage decisions, ownership, lifetime, and gameplay callbacks.
-- **Client:** templates, cache warming, trails/particles, preparation, impact visuals, and visual retention.
+- **Server:** movement, collision dimensions, ownership, lifetime, and damage callbacks.
+- **Client:** templates, cache warming, trails/particles, and impact visuals.
 
-`CreateProjectilePart = false` on the server avoids creating a server visual. It does **not** disable server simulation, spherecasts, damage callbacks, or clashes. Client registration does not set the server's hit radius. A giant local mesh is not a giant server hitbox.
+Use `CreateProjectilePart = false` when the server only needs simulation. Collision and gameplay callbacks still run. Set collision dimensions on the server; the client template's size does not determine the server hitbox.
 
 ## Server Gameplay Registration
 
-Example server ModuleScript, called by trusted ability code after its own usability/cooldown/aim checks:
+This server ModuleScript registers a projectile and returns a firing function. Call it after the ability's equipped-state, cooldown, and aim checks:
 
 ```lua
 --// Rocket Gameplay
@@ -129,11 +112,11 @@ end;
 return FireRocket;
 ```
 
-Add your server `OnServerHit` damage logic using the [callback contracts](./API.md#callbacks-and-terminal-lifetime). Always flatten ignore arrays; putting a team-character array inside another array does not exclude its contents.
+Add damage through `OnServerHit`; see the [callback contracts](./API.md#callbacks-and-terminal-lifetime). `IgnoreList` must be a flat array of Instances, including any team characters you want excluded.
 
 ## Client Visual Registration
 
-Put this ModuleScript directly under `ProjectileCore.ClientRegistrations`, name it `Rocket`, and give it a separate BasePart/Model child named `Template`. Keep its `Disabled` attribute unset or false. The current loader discovers direct registration children; do not rely on arbitrary nested-folder traversal or load order.
+Put this ModuleScript directly under `ProjectileCore.ClientRegistrations`, name it `Rocket`, and add a BasePart or Model child named `Template`. Leave its `Disabled` attribute unset or false. Registration modules are direct children; the loader does not recursively search folders or resolve dependencies between them.
 
 ```lua
 --// Rocket Visual Registration
@@ -169,13 +152,13 @@ local Definition : ProjectileDefinition = {
 return Definition;
 ```
 
-The registration can instead return `function(ProjectileCore) -> Definition`. **Do not require the root from its own registration modules:** the loader is already running inside that require. For typed factories, require `Shared.Types`, not the root. Call preloading **after** the returned definition has been registered, not inside the factory before it exists.
+A registration module may also return `function(ProjectileCore) -> Definition`. Use `Shared.Types` for its annotations: requiring the root from a registration module would create a circular dependency. Preload after the definition has been registered.
 
-Core positions the leased visual before preparation/effect restoration. Keep effect setup in `PrepareProjectilePart`; do not add a second movement loop, parent visuals into gameplay assemblies, or enable a pooled trail before initial placement. Origin snaps are not a feature.
+Use `PrepareProjectilePart` for effect setup. It runs after initial placement and before managed effects are restored. Let Core handle movement; a second CFrame loop or an early-enabled pooled trail can introduce visible jumps.
 
-## Prepare Before The Fight
+## Preparation
 
-Run this from client loading/ability-preparation code after requiring the root and completing registration. It yields; movement/hit callbacks are the wrong place for it.
+Call `PreloadProjectile` from client loading or ability-preparation code, after registration. It yields, so keep it outside movement and hit callbacks.
 
 ```lua
 local Preparation = ProjectileCore["PreloadProjectile"]("Rocket", { ["WarmCount"] = 48; ["PreloadAssets"] = true; });
@@ -185,7 +168,7 @@ if not Preparation["CacheReady"] then
 end;
 ```
 
-Repeated requests warm **toward** the available target instead of adding another 48 every time. Client asset failures are reported separately from cache/metadata readiness. Server preparation cannot load assets for other machines. See [preparation and cache ownership](./API.md#preparation-and-cache-ownership).
+Repeated calls warm toward 48 available objects rather than adding 48 each time. Asset failures are reported separately from cache readiness. Call it on clients to load their assets; server preparation only warms server caches. [Preparation details](./API.md#preparation-and-cache-ownership).
 
 ## API Map
 
@@ -207,17 +190,19 @@ Repeated requests warm **toward** the available target instead of adding another
 
 ## Performance And Security
 
-- Warm client caches and metadata before the first fight. Cache misses, Model descendants, particles, and callbacks still cost time. `SpawnBurst` simplifies authoring; it does not make 50 blades cost one blade.
-- Prefer server-invisible simulated gameplay plus cached client visuals. Do not make a workspace Part solely to give a server raycast an identity.
-- Keep world collision volumes small enough for gameplay. Use the separate living-humanoid radius when character generosity should not make a meteor hit a wall ten studs early.
-- Use a persistent Attract controller instead of repeatedly broadcasting overlapping attraction pulses. Keep one-shot `AttractArea` for actual pulses.
-- Homing acquisition and repeated query/filter work are scheduled/reused, not eliminated. Custom validators and high-frequency callbacks can still become your expensive little gremlins.
-- Reliable lifecycle delivery is byte-budgeted and paced; ordinary corrections are disposable/coalesced. Keep replicated user data small and non-secret. Debug visualizers and broad diagnostic snapshots are not per-projectile hot-loop tools.
-- Client particle/light distance budgets are opt-in and do not lower server collision accuracy. DDA/Bolt/Actors are measured options with eligibility and fallback rules, not default speed guarantees.
-- Inbound guards reject malformed/forged Core traffic, limit calls/bytes and invokes, and throttle recovery. They do not validate your weapon's equipped state, cooldown, ammo, firing origin, or damage permission. Server-authoritative does not mean every surrounding remote is magically safe.
+- Prepare caches before large bursts and keep frequent callbacks small. Burst helpers still create ordinary projectiles with their usual simulation and delivery costs.
+- Use a persistent Attract controller for a sustained field instead of repeatedly broadcasting `AttractArea` pulses.
+- Keep replicated `UserData` small and non-secret. Leave private ability state in server-owned storage; the [patch caveat](./API.md#userdata) matters here.
+- Sample diagnostics at a modest rate and disable debug visuals when measuring. Client visual budgets can reduce particle/light work without changing server collision.
 
-The recent local eight-client checks delivered all 48 projectiles per client through both transports with no reported send/flush failures or terminal queue residue. They also recorded high frame times and client receive-to-prepare delays above one second on the shared test machine. Those are delivery-count passes, **not latency passes or 16-player certification**. Proposed inbox catch-up improvements are not implemented in this documentation baseline.
+Remote guards handle malformed traffic and rate limits. Weapon code must still validate equipped state, cooldown, ammo, firing origin, aim, and damage permissions on the server.
 
-## Full Reference
+The eight-local-client test delivered all 48 shots to each client through both transports, but client receive-to-prepare delays exceeded one second on the shared test machine. Delivery passed; latency remains unresolved. See [test results and known limits](./API.md#current-limits-and-verification) before planning a larger server test.
 
-Read [API.md](./API.md) for contracts, defaults, handle methods, examples, current limitations, and the distinction between "stopped firing" and "all projectiles have ended". That distinction has saved at least one ability from becoming haunted.
+## Contributors
+
+- **@BlajahBean** - Main programmer and mathematician.
+- **@SonarHEXAGON** - Sub programmer, testing, live implementation, physical/projectile integration, and GitHub maintenance.
+- **@RalziumQUANTUM** - Formatting, comments, and GitHub documentation.
+- **@keklol0401010101010** - Creator of HomingCast.
+- **@23sinek345** - Creator of SwiftCast; helped with optimization questions.

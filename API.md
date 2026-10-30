@@ -1,8 +1,6 @@
 # ProjectileCore API Reference
 
-Reference for the **integrated `ProjectileSystem_Test` build inspected on 30 October 2026**. This repository is documentation-only: it does not currently provide the source tree, dependencies, or an installable release. The older standalone export is a separate build, not evidence that every change below has reached that package.
-
-This is fine. Please read the authority and callback sections before giving a cosmetic blade the nuclear launch codes.
+API reference for the integrated `ProjectileSystem_Test` build, checked on **30 October 2026**. See the [README](./README.md) for setup, package status, and server/client registration examples.
 
 ## Contents
 
@@ -33,7 +31,7 @@ This is fine. Please read the authority and callback sections before giving a co
 
 ## Setup, Authority, And Types
 
-An existing integrated installation normally uses `ReplicatedStorage.ModuleScripts.ProjectileCoreSystem.ProjectileCore`. It also imports game-owned utility, networking, humanoid, and VFX dependencies; this path is not a complete installation manifest. See [README](./README.md#setup-and-authority).
+The integrated build uses `ReplicatedStorage.ModuleScripts.ProjectileCoreSystem.ProjectileCore` and its game-specific dependencies. The examples assume those are installed.
 
 ```lua
 local ReplicatedStorage = game:GetService("ReplicatedStorage");
@@ -43,15 +41,15 @@ local ProjectileCore = require(ReplicatedStorage["ModuleScripts"]["ProjectileCor
 
 Require on the server and each client. Register gameplay settings on the server and matching visual names/templates on clients. Definitions are runtime-local; registering a client template does not configure the server's collision shape.
 
-`Authority = "Server"` makes server simulation the gameplay truth. Its client replicas are presentation, not damage authorities. `Authority = "Client"` is for local effects/previews. Spawn authority defaults to the executing side. Setting a local table to `Authority = "Server"` does not send an authorized spawn command to the server.
+`Authority = "Server"` uses server simulation for gameplay and client replicas for presentation. `Authority = "Client"` is for local effects or previews. Authority defaults to the executing side; setting it to Server in a LocalScript does not request a server spawn.
 
-The root exports Luau types and also exposes `ProjectileCore["Types"]`, the shared Types module. Use direct-require type aliases in ordinary consumers. Registration factories running during root initialization must require `Shared.Types` instead of requiring the root again; see [the client registration example](./README.md#client-visual-registration). No dependency Ouroboros, thank you.
+The root exports Luau types and exposes the shared module through `ProjectileCore["Types"]`. Use direct-require type aliases in ordinary consumers. Registration factories run during root initialization, so require `Shared.Types` there to avoid a circular dependency. See the [client registration example](./README.md#client-visual-registration).
 
-Types describe contracts; they do not replace runtime validation. Some diagnostic/configuration interfaces remain dynamic. Method names are case-sensitive. Call module APIs with brackets/dot-call semantics; handle methods use colons.
+Module functions use dot-call semantics; handle methods use colons. The examples use bracket access for named fields. Some configuration and diagnostic types remain dynamic.
 
 ## Public API Index
 
-These are the current public functions. `nil` below means no success result is promised; do not treat a mutator's return as an acknowledgement unless its signature explicitly returns a boolean. Invalid creation/configuration requests can assert. Many mutations quietly ignore missing/ended IDs.
+`nil` below means the function has no success return. Creation and configuration calls can assert on invalid input; many mutations ignore missing or ended IDs. Functions returning boolean/reason report rejection explicitly.
 
 ```text
 RegisterProjectile(Name, Definition?) -> RegisteredProjectileDefinition
@@ -108,17 +106,17 @@ ConfigureParallel(Mode, Options?) -> nil
 DetectHumanoidsNearby(Origin, Range, IgnoreList, Owner?, Visualizer, IgnoreForceFields, IgnoreFriendly?, PartLimit?, VisualizerProperties?, UseRobloxQuery?) -> boolean, { Humanoid }
 ```
 
-`DestroyProjectile` aliases `Cancel`; `GetNetworkInfo` aliases `GetNetworkTransport`. `Types` is a module/type surface, not a spawn method. Underscored fields, worker buffers, numeric network IDs, serialized control snapshots, and recovery remotes are internal plumbing, not another gameplay API.
+`DestroyProjectile` aliases `Cancel`; `GetNetworkInfo` aliases `GetNetworkTransport`. `Types` exposes shared types. Underscored fields, worker buffers, numeric network IDs, control snapshots, and recovery remotes are internal and may change.
 
 ## Registration And Spawn Settings
 
 ### RegisterProjectile
 
-`RegisterProjectile(Name : string, Definition? : ProjectileDefinition)` registers/replaces defaults on the current side and returns the resolved definition. A previously unknown name is also registered with defaults when spawned. Register explicitly anyway: typos should not be your content pipeline.
+`RegisterProjectile(Name : string, Definition? : ProjectileDefinition)` registers or replaces defaults on the current side and returns the resolved definition. Spawning an unknown name creates a default registration; explicit registration is recommended so missing settings are easier to catch.
 
 Presets under `Objects.Projectiles.<Name>` can supply a BasePart, Model, or ModuleScript-based projectile/cache record. A Model needs a resolvable BasePart, preferably an intentional PrimaryPart. Use separate client visual templates, not a live character assembly.
 
-Definition and spawn settings are resolved per field; this is not a universal shallow `table.clone`. Explicit boolean false is respected where supported. Nested projectile settings, immunity, replication policy, and clash settings have their own merge paths. Avoid cyclic configuration/UserData tables. A spawn override does not rewrite the registered definition.
+Spawn overrides leave the registered definition unchanged. Resolution is field-specific: nested projectile settings, immunity, replication policy, and clash settings each have their own merge rules. Explicit false is respected where supported. Configuration and UserData tables should be acyclic.
 
 ### SpawnSimulated
 
@@ -181,15 +179,15 @@ Rays are the default. Choose **one** active world-volume setting: `SpherecastRad
 
 `HumanoidSpherecastRadius` is a separate positive sphere sweep for living characters, not a second world-volume selector. For example, world sphere radius 5 plus humanoid radius 15 allows generous character hits without hitting a wall with the 15-stud sphere. Dead-character geometry uses the ordinary world path. This feature is incompatible with a custom `RaycastFunction`; it does not add stationary overlap detection.
 
-`CollisionEnabled = false` still advances movement, controls, age/distance, and lifetime. Ability-owned hitboxes are unaffected. Re-enable from the current position; the disabled path is not swept retroactively. Do not describe this as collision immunity against every external damage system.
+`CollisionEnabled = false` still advances movement, controls, age/distance, and lifetime. Ability-owned hitboxes are unaffected. Re-enabling collision starts swept checks from the current position, without checking the disabled path retroactively.
 
-For phasing through ordinary hits, `CanPierce(Entry, SwiftProjectile, HitResult) -> true` continues the cast. Shield deflection is considered before piercing. Use a separate server hitbox for repeat damage if that is your intended mechanic; do not abuse terminal-hit callbacks as an overlap loop.
+Returning true from `CanPierce(Entry, SwiftProjectile, HitResult)` continues through a contact. Shield deflection is checked first. For repeated proximity damage, use an ability-owned server hitbox rather than terminal-hit callbacks.
 
 ### Close-Hit Snap
 
-`SnapHitEnabled = true`, `SnapHitDistance = 12`, `SnapHitTime = 0.05` are present. A one-time early probe uses the smaller distance/time window to resolve an immediately terminal hit before visible travel. A miss does not advance the projectile or fire a fake callback. Existing sphere/shapecast, deflection and normal hit cleanup paths remain relevant.
+Defaults are `SnapHitEnabled = true`, `SnapHitDistance = 12`, and `SnapHitTime = 0.05`. The first step probes the smaller distance/time window and resolves an immediate terminal hit before visible travel. A miss leaves position unchanged and fires no callbacks. The probe uses the existing cast, deflection, and hit-cleanup paths.
 
-Root spawn resolution disables the inherited snap default when a custom `CanPierce` exists. An explicit spawn `SnapHitEnabled` (including its ProjectileSettings override) takes precedence; forcing true means accepting that callback/probe interaction. Raw SwiftCast remains conservative unless configured through Core. Snap is simulated-only and is not a general hitscan gun implementation.
+Core disables the inherited snap default when a custom `CanPierce` exists. An explicit spawn `SnapHitEnabled`, including the ProjectileSettings override, takes precedence. Forcing it on allows the early probe to run the piercing callback. Raw SwiftCast defaults to snap disabled. This feature is simulated-only.
 
 ### Bounce
 
@@ -207,7 +205,7 @@ Provide `Bounce = { ["Enabled"] = true; ... }` on a simulated definition/spawn/p
 | `CanBounce` | Optional synchronous `(Entry, HitResult, IncomingVelocity) -> boolean` |
 | `OnBounce` | Optional protected notification `(Entry, HitResult, NewVelocity, BounceCount)` |
 
-Terrain/non-humanoid geometry is eligible by default; humanoids need explicit CanBounce approval. World contact precedence is deflection, piercing, then bounce/terminal hit. Count, speed, progress, and corner safeguards prevent an eternal vibrating grenade. Successful bounces are not terminal impacts. Physical projectiles retain Roblox-native collision/bounce behavior.
+Terrain and non-humanoid geometry are eligible by default; humanoids need explicit CanBounce approval. Contact order is deflection, piercing, then bounce or terminal hit. Bounce count, minimum speed, insufficient progress, and repeated corner contacts can end a shot. Successful bounces are not terminal impacts. Physical projectiles use Roblox's native collision and bounce behavior.
 
 ## Callbacks And Terminal Lifetime
 
@@ -217,7 +215,7 @@ Terrain/non-humanoid geometry is eligible by default; humanoids need explicit Ca
 | `OnServerHit`, `OnClientHit` | `(Entry, HitResult?, Reason, ImpactContext?)`; terminal Hit notification on the relevant side. |
 | `OnServerDestroy`, `OnClientDestroy` | `(Entry, Reason, ImpactContext?)`; terminal reason may be cancellation, timeout, clash, or other cleanup, not just a world hit. |
 | Spawn `OnDestroy` | Entry-level `(Entry, Reason, ImpactContext?)` notification in addition to side-specific destruction. |
-| `OnPositionChange` | Simulated `(Entry, Position, LastPosition)`; hot movement notification, not a place to preload or enumerate the entire world. |
+| `OnPositionChange` | Simulated `(Entry, Position, LastPosition)`; frequent movement notification. Keep work here small and non-yielding. |
 | `CanPierce` | `(Entry, SwiftProjectile, HitResult) -> boolean`; synchronous collision decision. |
 | `RaycastFunction` | `(Entry, Origin, Displacement, RaycastParams) -> RaycastResult?`; synchronous replacement query. |
 | `OnDeflect` | `(Entry, Deflector?)`; notification, not permission to choose a different committed collision. |
@@ -226,7 +224,7 @@ Terrain/non-humanoid geometry is eligible by default; humanoids need explicit Ca
 
 Decision hooks must not yield: this includes piercing, raycast, bounce/clash eligibility, and allegiance predicates. Protected terminal notifications run independently from mandatory cleanup. Hit is invoked before destroy in that notification chain, but active registry/cache ownership does not wait for a yielded user callback. An entry retained by a callback is not an active visual lease.
 
-`Cleanup()` is idempotent. Core forces forgotten `OnPartEnd` cleanup after the maximum eight-second grace; this is a safety net, not your effect lifetime. Stale warmup/deferred work is guarded against recycled leases. Do not keep moving a projectile Part from a terminal callback after it may have returned to cache.
+`Cleanup()` is idempotent. Call it when an OnPartEnd fade finishes; Core forces cleanup after eight seconds if it was missed. Warmup and deferred work check the visual lease before touching a recycled object. Terminal callbacks should use captured data rather than continue moving a Part that may already be back in the cache.
 
 On replicated server hits, **`Reason == "Hit"` does not guarantee a non-nil HitResult**. `ReplicateHitInfo` defaults false. For authoritative contact position/normal/material/local target placement, opt in on the server, then prefer `ImpactContext`. A reconstructed client hit record is not a guarantee of a native RaycastResult userdata or an available streamed Instance.
 
@@ -256,13 +254,13 @@ Options: `WarmCount` defaults to the registered warm count; `PreloadAssets` defa
 | `AssetsRequested`, `AssetsReady`, `AssetFailures`, `AssetError` | Separate client asset outcome; failures contain Asset and Enum.AssetFetchStatus. Server cache readiness does not mean clients loaded assets. |
 | `RequestedWarmCount`, `TargetWarmCount`, `LimitedByRetention`, `ElapsedSeconds` | Effective target/cap and elapsed wall time. |
 
-`GetProjectileCacheStats(Name)` returns nil without a Core cache; otherwise a snapshot with Available, InUse, PendingWarmCount, RetentionLimit, EmptyCacheCreations, TotalCreated/Destroyed, HighWaterCreated, MaxSize, MetadataAvailable, CreationSeconds, and MaximumCreationSeconds. Do not confuse retained idle objects with leaked active leases.
+`GetProjectileCacheStats(Name)` returns nil without a Core cache; otherwise it returns Available, InUse, PendingWarmCount, RetentionLimit, EmptyCacheCreations, TotalCreated/Destroyed, HighWaterCreated, MaxSize, MetadataAvailable, CreationSeconds, and MaximumCreationSeconds. Available objects are retained for reuse; InUse tracks active leases.
 
 Idle retention is not an active-shot cap. Surplus idle visuals become eligible for trimming after ten seconds through shared bounded maintenance. Ordinary firing can proceed during background warming and may create cache misses. Preparation does not reserve a position, start age/lifetime, enable effects, or send a spawn packet. Run it in loading/ability preparation, not receive/movement/hit handlers.
 
 ## Bursts And Patterns
 
-`SpawnBurst(Name, Information)` emits ordinary **simulated** projectiles through normal spawn/collision/replication. It does not make extra shots free, send one compact pattern packet, or manage already-fired shots after cancellation.
+`SpawnBurst(Name, Information)` emits simulated projectiles through the usual spawn, collision, and replication paths. It handles patterns and scheduling; each shot still has its own simulation and network cost. Cancelling the burst stops pending emissions only.
 
 | Field | Default / contract |
 | --- | --- |
@@ -278,7 +276,7 @@ Count is 1-256 per volley; requested total is at most 4,096. SpreadAngle is the 
 
 Settings apply shared info, generated position/direction, indexed override, then hook override. Generated direction removes shared Velocity; explicit per-shot Velocity remains supported. Context contains `Index` (global requested emission index), `VolleyIndex`, `ShotIndex`, sampled `Origin`, and generated `Direction`. Caller settings are copied. IDs/network IDs are prohibited in burst settings, and an assigned burst cannot switch Group through shot overrides/hooks.
 
-Zero-delay first volleys run synchronously. Later volleys share a lazy scheduler: at most four whole scheduled volleys per Heartbeat, one per burst, under a 1ms **soft** inter-volley budget. A whole volley can exceed that budget. Missed intervals do not dump several catch-up volleys into one frame.
+Zero-delay first volleys run synchronously. Later volleys share a lazy scheduler: at most four whole volleys per Heartbeat, one per burst, under a 1ms soft inter-volley budget. A whole volley can exceed that budget. After a delay, the next interval starts from actual emission time rather than firing several overdue volleys together.
 
 | BurstHandle method | Result |
 | --- | --- |
@@ -311,11 +309,11 @@ local Burst = ProjectileCore["SpawnBurst"]("Rocket", {
 });
 ```
 
-This gives -12, 0, +12 degrees. A manual loop is still valid for custom attacks; SpawnBurst is an authoring/scheduling helper, not a mandatory tax.
+This gives -12, 0, and +12 degrees. Manual SpawnSimulated loops remain supported for custom layouts.
 
 ## Projectile Groups
 
-`CreateProjectileGroup({ Name?, OnFinished? }?)` returns a runtime-local handle for one attack. Members can be simulated or registered physical entries, with one group per projectile. Ownership changes detach members synchronously; same-owner assignments retain membership. A stolen projectile does not remain controllable by its original attack group.
+`CreateProjectileGroup({ Name?, OnFinished? }?)` returns a runtime-local handle for managing an attack. It accepts simulated and registered physical entries, with one group per projectile. Actual ownership changes detach members synchronously, so later group commands cannot control a transferred projectile. Same-owner assignments retain membership.
 
 | Method | Contract |
 | --- | --- |
@@ -368,7 +366,7 @@ local function StopAttack() : ()
 end;
 ```
 
-The already-assigned burst may finish after Seal. Destroy stops both those pending emissions and current members. Keep the cleanup function in the ability's existing lifecycle owner; this snippet deliberately does not invent another connection manager.
+Seal allows the assigned burst to finish. Destroy stops pending emissions and cancels current members. Call StopAttack from the ability's existing death or unequip cleanup.
 
 ## Movement, Ownership, And Patching
 
@@ -385,7 +383,7 @@ These functions operate on an active ID. Call server gameplay mutations on the s
 | `PatchProjectile` | Supported simulated fields only, validated before application. It does not replace identity, ownership, template, cache, callbacks, lifetime limits, or group membership. |
 | `Cancel`, `DestroyProjectile` | Both types; optional reason defaults Cancelled. Idempotent for an absent/ended entry. Normal terminal notifications/visual release still run. |
 
-Where exposed, `ShouldBroadcast` defaults to replication unless explicitly false and is relevant to replicated simulated state. It does not make physical state travel through a new simulated lifecycle system. Prefer owner/control APIs over mutating entry internals.
+Where exposed, `ShouldBroadcast` defaults to replication unless explicitly false. It applies to replicated simulated state; physical state continues through the physical adapters. Use the owner and control APIs rather than editing entry internals.
 
 Supported patch keys are `Velocity`, `Acceleration`, `HomingData`, `IgnoreList`, `IgnoreWater`, `SpherecastRadius`, `HumanoidSpherecastRadius`, `BlockcastSize`, `UseShapecast`, `Bounce`, `ProjectileCollision`, `CollisionEnabled`, `CollisionMode`, `SimulationStepMode`, `AllowEmptySpaceSkip`, `TimeScale`, `AngularSpin`, `SpinStrength`, `SpinDirection`, the three SnapHit fields, `EffectPolicy`, `EffectsEnabled`, `ReplicationPolicy`, `ReplicationSyncInterval`, `ReplicationSmoothTime`, `ReplicationSnapDistance`, `UserData`, `ReplicatedUserData`, `ReplicateUserData`, `ReplicateHitInfo`, `ControlImmunity`, `Curves`, and `AllowVisualBudget`.
 
@@ -404,13 +402,13 @@ Lua tables do not carry a nil-valued key. Assigning nil in a patch is not a univ
 | `HomingData` | Required valid homing settings for Homing; incompatible with other modes. |
 | `TravelData` | Required valid travel target/settings for Bezier; curve starts at current tracked position. Incompatible with Linear/Homing. |
 | `CollisionEnabled` | Optional new world/clash collision state. |
-| `ReleaseControllers` | Explicit live Motion/Force controller handles to release; not an ID list or every controller in the world. |
+| `ReleaseControllers` | Array of live Motion/Force controller handles to release. |
 | `Duration`, `OnPhaseComplete` | Optional finite **positive** effective-time timer, with protected `(Identifier, Status)` notification. Callback requires Duration. |
 | `ExpectedRevision` | Optional optimistic check against current phase Revision. |
 
 Preserves position, public/network identity, owner, group membership, total age/distance limits, visuals, effects, and angular spin. Does not rerun preparation, close-hit snap, spawn, or destroy notifications. Superseded homing/travel is reconciled and stale worker/collision results invalidated; Wind momentum is merged once rather than duplicated.
 
-Named released controllers cannot recapture that entry until those controllers end. Other controls, one-shot attraction, immunity, and FrozenMoment remain. Release must not overwrite the new velocity with an old capture velocity. This is an explicit release list, not an "ignore every blackhole forever" option.
+Released controllers cannot recapture the entry until those controllers end. Unlisted controls, one-shot attraction, immunity, and FrozenMoment remain in effect. Release preserves the new phase velocity instead of restoring an older capture velocity.
 
 Status: `Name`, `Revision`, `Mode`, `Elapsed`, `Duration`, `TimerCompleted`, `Interrupted`. Duration expiry reports completion **once** but does not stop movement or auto-transition. Slowdown affects the clock; frozen effective time pauses it. Replacement, actual ownership change, deflection, and base-motion-changing APIs invalidate the pending notification. External field influence alone does not.
 
@@ -439,7 +437,7 @@ Call from the ability's existing release/input/timing logic. Keep ownership of t
 
 HomingData supports `Enabled`, Instance `Target` (legacy `HomingInstance`), `TargetTag`, Vector3 `TargetPosition`, local/world target `Offset`, `TurnSpeed`, `MinimumDistance`, `AutoAcquire`, `AutoAcquireRange`, `AutoAcquireInterval`, `AutoAcquireRetarget`, `RequireLineOfSight`, `AutoAcquireValidator`, and `DebugVisualizerInterval`.
 
-Direct homing uses TurnSpeed 10 and MinimumDistance 0 when not supplied. Auto acquisition is opt-in, samples at 0.1 seconds by default, and needs an explicit useful range (omitted range resolves to 0). Provide the synchronous `AutoAcquireValidator(Humanoid, Character) -> boolean` for your game's living/enemy/ForceField rules. Do not assume a target selector knows your entire faction system. Acquisition scheduling spreads eligible refresh work; it does not make expensive custom validators free.
+Direct homing defaults to TurnSpeed 10 and MinimumDistance 0. Auto acquisition is opt-in, samples at 0.1 seconds by default, and needs a range; the omitted range resolves to 0. Use the synchronous `AutoAcquireValidator(Humanoid, Character) -> boolean` for additional target rules such as factions and ForceFields. Acquisition scheduling spreads refresh work, but each validator still runs on the main thread.
 
 Bezier TravelData accepts `Target`/`End` (Vector3, CFrame, BasePart, Model, Attachment), `EndPosition`, `TargetOffset`, `TrackTarget`, `ControlPoint` (quadratic), `ControlPointA`/`ControlPointB` (cubic), `Duration`, `Speed`, `OrientationMode`, `CompletionMode`, `HomingTurnSpeed`, `HomingMinimumDistance`, `ContinueDuration`, and `DestroyOnComplete`. Author Duration when timing matters rather than relying on derived distance/speed timing.
 
@@ -474,7 +472,7 @@ ReflectionMode supports Reflect, Return, Locate, Lob. Direct simulated defaults 
 
 `DeflectArea(Parameters) -> { BasePart }` adds area geometry, IgnoreList, Deflector/Character/Owner/Tool references, AreaGroup/Priority/LockDuration, optional LeadTime/UseIncomingFilter, ShouldBroadcast, debug options, and `DeflectFunction(Part?, Entry?, Position)`. That callback runs after each successful deflection; a server-invisible simulated entry can have nil Part. The returned array contains existing parts only, so it is **not** a count of every successful partless deflection. The physical area path can consider eligible physical parts under its existing deflectability rules.
 
-`AreaGroup` locks prevent repeated overlapping operations from replacing each other indiscriminately. Their priority/lock rules are separate from projectile groups. Do not confuse "these twelve blades belong to my Group" with "this field has AreaGroup Blackhole".
+`AreaGroup` controls priority locks between overlapping area operations. It is separate from CreateProjectileGroup membership.
 
 ### Configurable Surfaces
 
@@ -526,7 +524,7 @@ ProjectileCore["SetDeflectionPartConfig"](RedirectPart, {
 | `AffectSimulated`, `AffectPhysical`, `ShouldBroadcast` | true unless explicitly false. Physical capture is server-side. |
 | Debug options | Explicit opt-in area visualization, color/lifetime/transparency/AlwaysOnTop. |
 
-Area supports Sphere, Box, Cylinder, Disc, Cone, Pyramid, Capsule, HalfSphere through Shape/AreaShape, Center, CFrame/AreaCFrame, Range/Radius, Size, Height, Thickness, Direction/Normal/Axis. Disc is a **thin cylinder**, not an infinite plane. Supply geometry/orientation intentionally; a cone is not just a sphere with an ambitious name.
+Area supports Sphere, Box, Cylinder, Disc, Cone, Pyramid, Capsule, and HalfSphere. Geometry fields include Shape/AreaShape, Center, CFrame/AreaCFrame, Range/Radius, Size, Height, Thickness, and Direction/Normal/Axis. Disc uses a thin cylinder with finite thickness.
 
 | Lane | Modes / overlap behavior |
 | --- | --- |
@@ -548,7 +546,7 @@ Orbit/tornado Shape supports `ShapePartial` (default 1), Surface/Volume ShapeSty
 
 Persistent Attract uses Motion.Strength (20), Falloff (1.4), and Method VelocityDamp or AccelerationDamp. Prefer one lifetime-controlled field for a sustained vortex.
 
-`AttractArea(Information) -> { ProjectileEntry }` remains the separate pulse API: same family of center/area shapes plus Strength, Falloff, Duration, Method, OneShot, IgnoreList, affected-type flags, priority/group and broadcast options. It selects current eligible entries rather than continuously discovering newcomers. Do not send ten overlapping broadcasts/second merely to impersonate a persistent controller.
+`AttractArea(Information) -> { ProjectileEntry }` is the one-shot API. It accepts the same center/area shapes plus Strength, Falloff, Duration, Method, OneShot, IgnoreList, affected-type flags, priority/group, and broadcast options. It selects entries present at the time of the call. Use a persistent Attract controller when new projectiles should enter the field over its lifetime.
 
 ### Wind
 
@@ -633,7 +631,7 @@ Definition immunity merges with spawn immunity; explicit false overrides that ke
 | `Orbit`, `Tornado`, `FrozenMoment`, `Wind` | The named mode. |
 | `ProjectileCollision` | Incoming projectile clash responses; Deflect additionally blocks clash deflection. |
 
-false on Deflect does not punch through an independently true All/DeflectArea guard. Physical Deflectable/RespectDeflectable remain backward-compatible and are not replacements for these keys.
+Setting Deflect false does not override an independently true All or DeflectArea key. Physical Deflectable/RespectDeflectable checks still apply alongside immunity.
 
 ```lua
 ProjectileCore["RegisterProjectile"]("BossMeteor", {
@@ -701,7 +699,7 @@ local function EmbedBlade(Context : ProjectileCore.ProjectileImpactContext) : ()
 end;
 ```
 
-Offset/depth depends on your authored pivot and forward axis; Core does not infer a blade tip from mesh bounds or inherit random projectile spin. For a moving-target particle effect, pass an Attachment template, get its clone through `Handle:GetObject()`, then emit from a known child ParticleEmitter yourself. Do not reparent/recycle that owned clone. Misfortune's existing weapon-specific implementation is unchanged; migrating means requesting hit metadata and cloning a separate template through this helper, not handing it the active projectile Part.
+Set Offset for the template's pivot and forward axis; the helper does not infer a blade tip from mesh bounds or inherit projectile spin. For a moving-target particle effect, pass an Attachment template, get the clone with `Handle:GetObject()`, and emit from its known child ParticleEmitter. The handle owns that clone through cleanup. To migrate an existing embedded-blade effect, request hit metadata and use a separate template rather than the active projectile Part.
 
 ReplicateHitInfo enables context metadata through existing reliable Destroy/InstantHit delivery; there is no additional per-frame impact remote. Physical contexts use your ability's own VFX delivery when clients need them.
 
@@ -765,7 +763,7 @@ ProjectileCore["RegisterProjectile"]("GrowingMeteor", {
 });
 ```
 
-This grows the **visual only**; add a separate CollisionScale curve if gameplay collision should grow too. A Speed curve from 0.5 to 2 over Age accelerates a needle relative to its base speed. For a return attack, TransitionProjectile preserves curve progress; explicitly call ResetProjectileCurves after a successful transition only if the return should restart the curve. Do not reset lifetime limits accidentally to keep one blade alive forever.
+This grows the visual only; add CollisionScale if the collision volume should grow as well. A Speed curve from 0.5 to 2 over Age accelerates a needle relative to its base speed. TransitionProjectile preserves curve progress. For a return attack that should restart it, call ResetProjectileCurves after a successful transition; total lifetime limits remain unchanged.
 
 ## Physical Projectiles
 
@@ -773,11 +771,11 @@ This grows the **visual only**; add a separate CollisionScale curve if gameplay 
 
 Spawn fields: Creator, UserData, ControlImmunity, Group, ProjectileIdentifier, MaxDeflections (24), Deflectable (enabled unless false), AutoLifetime (optional), TimeScale (1), TravelMode (Linear), TravelData, PhysicalCast, callbacks. Physical UserData stays local to its entry; this API does not add a simulated Spawn sidecar or automatically deliver physical impact metadata to clients.
 
-`AutoLifetime` opts into finite lifetime tracking; physical time/control behavior uses physical adapters rather than promising identical simulated integration. World collisions and physical bounce remain Roblox's responsibility. `OnDeflect(Entry, Deflector?)` and `OnDestroy(Entry, Reason)` are entry notifications. Legacy `OnDeflected(Deflector?)`, `OnDestroyed()`, and `OnVoided()` have different argument shapes. The existing physical owner-change adapter has legacy NewOwner notification semantics; do not blindly reuse a simulated callback shape without checking that integration.
+`AutoLifetime` opts into finite lifetime tracking. Physical time/control behavior uses the physical adapters; world collision and bounce remain Roblox's responsibility. Entry notifications are `OnDeflect(Entry, Deflector?)` and `OnDestroy(Entry, Reason)`. Legacy callbacks use `OnDeflected(Deflector?)`, `OnDestroyed()`, and `OnVoided()`. The physical owner-change adapter also uses legacy NewOwner notification semantics, which differ from simulated callbacks.
 
 ### PhysicalCast
 
-Root SpawnPhysical **does pass through** PhysicalCast, OnPhysicalHit and OnPositionChange. This is no longer the old half-wired example.
+Pass PhysicalCast, OnPhysicalHit, and OnPositionChange through SpawnPhysical to enable autocast and its notifications.
 
 | Field | Behavior |
 | --- | --- |
@@ -815,11 +813,11 @@ local Identifier, Entry = ProjectileCore["SpawnPhysical"](GrenadePart, {
 });
 ```
 
-OnDestroyed is cleanup, not proof of a hit. Do not explode again in both OnPhysicalHit and an unconditional destroy callback unless you enjoy duplicate damage reports.
+OnDestroyed also runs for non-hit cleanup and has no reason argument. Use OnDestroy(Entry, Reason) when cleanup needs to distinguish hits from cancellation, and keep hit damage in one callback to avoid applying it twice.
 
 ## Visuals And Effects
 
-`PrepareProjectilePart` runs after valid tracked placement, before managed effect restoration/visibility. Its Context.Position is the intended tracked point, not a guessed template pivot. Transform warmup and the renderer own movement. Never add a second CFrame/Model pivot writer in OnPositionChange just to fight the renderer more efficiently.
+`PrepareProjectilePart` runs after tracked placement and before managed effects and visibility are restored. Context.Position gives the intended tracked point. Transform warmup and the renderer own movement; writing CFrame or pivoting the Model from another loop can cause jitter.
 
 `EffectPolicy` supports ManagedClasses, Allow/Deny filters by Classes/Names, and AutoEnable. `EffectsEnabled` is a spawn/patch switch. Core's managed effect/cache path clears stale trails, restores saved template values, and protects recycled leases. If a custom effect is outside that policy, initialize/clean it explicitly. A long OnPartEnd fade retains that leased visual; AttachImpact deliberately uses a separate clone instead.
 
@@ -829,49 +827,49 @@ Simulated visual-only settings: AngularSpin false, SpinStrength 0 **degrees/seco
 
 Current renderer logic spins when AngularSpin is true **or absolute SpinStrength is nonzero**. AngularSpin true with strength 0 produces no angular progress. To stop a previously nonzero spin, patch **both** AngularSpin false and SpinStrength 0; setting the boolean alone does not override the strength in this build.
 
-Historical `Angles = CFrame.Angles(...)` examples need a warning: the inspected renderer reads an internal Angles value, but the current public root spawn merge/types/patch surface do not wire that top-level field through. It is **not a verified public setting in this baseline**. Orient your template appropriately; this docs-only pass does not repair that missing plumbing.
+`Angles = CFrame.Angles(...)` is not currently supported as a top-level public setting. The renderer reads an internal Angles value, but registration/spawn merging, types, and patch handling do not carry it through. Orient the template itself until that wiring is completed.
 
 ### Visual Budgets And Debugging
 
 `ConfigureVisualBudget(Options?)` configures client-only distance budgets; nil restores disabled defaults. Options: Enabled false, NearDistance 256, FarDistance 768, FarParticleRate 0.35, LightDistance 384. Only definitions/spawns with AllowVisualBudget true opt in. Existing managed rates/light state are restored during reconfiguration. Geometry, trails, explicit bursts, damage and server collision accuracy are not silently reduced.
 
-DebugVisualize, DebugVisualizeCasts/Areas/Homing default false. DebugVisualizerLifetime defaults 0.15, Transparency 0.65, AlwaysOnTop true, Color optional. Use debug visualizers deliberately and disable them for gameplay measurements. They are not free content.
+DebugVisualize and DebugVisualizeCasts/Areas/Homing default to false. DebugVisualizerLifetime defaults to 0.15, Transparency 0.65, AlwaysOnTop true, with optional Color. Disable visualizers when measuring normal gameplay cost.
 
 ## Networking, User Data, And Recovery
 
 ### Transport And Relevance
 
-`SetNetworkTransport(Mode?)` accepts Auto, ByteNet, SoNET; nil/invalid mode resolves to Auto in this integrated build. Auto uses successfully initialized ByteNet when available, otherwise SoNET. `GetNetworkTransport()` returns diagnostics including requested Mode, resolved ActiveTransport, availability, limits, queues and failures. `GetNetworkInfo()` is its alias. Inspect resolved state rather than assuming a requested string proves initialization succeeded.
+`SetNetworkTransport(Mode?)` accepts Auto, ByteNet, and SoNET; nil or an invalid mode resolves to Auto. Auto prefers ByteNet when initialization succeeds, otherwise SoNET. `GetNetworkTransport()` reports requested Mode, resolved ActiveTransport, availability, limits, queues, and failures. `GetNetworkInfo()` is an alias.
 
-Keep transport selection consistent on both sides and avoid switching while deliveries are pending; this API does not promise a cross-transport lifecycle barrier. Explicit SoNET is supported. Do not mix this integrated recovery endpoint with the older standalone package's different runtime/remotes.
+Select the same transport on both sides before sending projectiles. Switching with deliveries pending has no cross-transport ordering barrier. The integrated and older standalone builds also use different recovery endpoints.
 
 ReplicationPolicy supports Mode Automatic/Global/Spatial/Owner/None, Distance, BoundsRadius, AlwaysRelevant, OwnerAlwaysRelevant, Priority, InstantHitVisual, PredictVisualHits. Automatic resolves Spatial when StreamingEnabled, Global otherwise. Spatial distance defaults to max(StreamingTargetRadius + 256, 512), BoundsRadius to template bounding radius, owner relevance true, AlwaysRelevant false, Priority 0, InstantHitVisual true. Supply BoundsRadius on a server-invisible large projectile if the server has no template from which to infer it.
 
 Interest checks run at 10Hz with 128 studs of exit hysteresis, late-spawn on entry, and visual-only cull on departure. Relevance affects network/presentation, not authoritative simulation/damage. A culled visual is not a cancelled server projectile.
 
-PredictVisualHits is an optional cosmetic ray-clipping aid for eligible server-owned linear visuals. It never reports gameplay hits. It is not a substitute for authoritative hit metadata, spherecasts, or actual client-side damage permission.
+PredictVisualHits optionally ray-clips eligible server-owned linear visuals on the client. It only affects presentation; authoritative contacts still come from server simulation and optional hit metadata.
 
 Lifecycle spawn/redirect/bounce/deflect/destroy/cull/forced corrections are reliable, ordered, byte-budgeted and paced to at most eight packets/player/Heartbeat. Ordinary sync uses compact numeric IDs, byte-limited batches, a 12 KiB/s per-player application budget with burst allowance, newest-state coalescing and fair deferral. Unknown sync IDs are safely ignored until reliable spawn arrives. Reliable queue saturation defers work; it does not silently drop lifecycle events or switch transports.
 
-Immutable lifecycle encoding is shared across recipients; recipient filtering/progress/fragmentation stays independent. This saves preparation work, not the bandwidth of sending to more machines. Single oversized lifecycle events use bounded reliable fragmentation: 256 KiB/message, eight pending messages, 1 MiB aggregate reassembly, five-second timeout. This is not permission to ship your inventory in every meteor.
+Lifecycle records are encoded once and shared across recipients, while relevance, queue progress, and fragmentation remain per player. Bandwidth still scales with recipient count. Single oversized events use reliable fragmentation, limited to 256 KiB/message, eight pending messages, 1 MiB aggregate reassembly, and a five-second timeout.
 
 Spawn/destroy within the current server flush window can collapse to InstantHit with authoritative start/contact data and a resolved transient client visual/callback path rather than a travelling SwiftCast. Existing callbacks remain relevant. Short paths are not guaranteed to produce a visible Roblox Trail sample; instant-hit/tracer policy and effect design matter.
 
 ### UserData
 
-For simulated entries, ReplicateUserData defaults **true**. At spawn, explicit ReplicatedUserData supplies the replicated subset; otherwise Entry.UserData is sanitized for the client when the fallback flag is enabled. ReplicateUserData false disables that fallback, **not every possible UserData delivery path**. Explicit replicated subsets remain intentionally sendable. Never put secrets or large object graphs in these fields.
+For simulated entries, ReplicateUserData defaults to true. At spawn, explicit ReplicatedUserData supplies the client subset; otherwise Core sanitizes Entry.UserData when the fallback flag is enabled. Setting ReplicateUserData false disables that fallback, but explicit ReplicatedUserData can still be sent. Keep both fields small and non-secret.
 
-Sanitization whitelists payload keys, removes functions/unsupported values/cycles, caps nested tables at depth 16 and 128 fields/table, and truncates strings to 1,024 bytes in the final inspected source. Parented Instance references can travel; missing streamed instances may be nil client-side. Numbers, booleans, strings, Vector3/CFrame/Color3/EnumItem and bounded tables are the intended sidecar family. Arbitrary buffers/threads/functions are not a portable UserData schema.
+Sanitization whitelists payload keys, removes unsupported values and cycles, limits tables to depth 16 and 128 fields each, and truncates strings to 1,024 bytes. Supported values include numbers, booleans, strings, Vector3/CFrame/Color3/EnumItem, bounded tables, and parented Instance references. Streamed-out instances may arrive as nil. Buffers, threads, and functions are unsupported as general UserData values.
 
-**Current patch caveat:** PatchProjectile accepts UserData/ReplicatedUserData, merges that patch with Entry.UserData, and stores the merged result as the explicit replicated copy. Patch payloads can also carry the patched fields. Consequently, ReplicateUserData false or an earlier small explicit subset is **not a privacy boundary after such patches**; later patch/recovery/terminal delivery can expose data that was originally server-only. Keep private ability state in a separate server-owned table instead. This docs-only pass documents that behavior; it does not repair it.
+**Patch caveat:** PatchProjectile merges UserData/ReplicatedUserData patches with Entry.UserData and stores the merged result as the explicit replicated copy. Patch payloads can also carry those fields. Later patch, recovery, or terminal delivery can therefore include data outside an earlier client subset, even with ReplicateUserData false. Store private ability state in a separate server-owned table.
 
-Do not assume replacing an entry table replicates itself. SpawnPhysical's UserData is not automatically emitted through simulated spawn packets.
+Use the supported mutation APIs to replicate changes. SpawnPhysical's UserData is local to its entry and does not use simulated spawn packets.
 
 ### Recovery And Guards
 
-The existing integrated GetSnapshot command now returns a **small acknowledgement** with Status, optional RecoveryIdentifier, and RetryAfter; bundled clients consume paced reliable recovery records and completion messages instead of a giant returned array. Ability code should not call these internal remotes directly.
+GetSnapshot returns an acknowledgement with Status, optional RecoveryIdentifier, and RetryAfter. The bundled client then receives recovery records and completion through paced reliable queues. This is internal networking; ability code should use the public API.
 
-Recovery preserves one active job/player, one accepted request per five seconds, and at most 256 recovered projectiles per job with explicit truncation. Shared build work is bounded by 1ms, 64 candidate checks, or 16 serialized records per Heartbeat. Normal relevance discovery can handle remaining entries. Stale identity/generation/relevance checks prevent recovery resurrecting ended projectiles.
+Recovery allows one active job/player, one accepted request per five seconds, and at most 256 projectiles per job, reporting truncation explicitly. The shared builder stops at 1ms, 64 candidate checks, or 16 serialized records per Heartbeat. Normal relevance discovery handles remaining entries. Entries are rechecked for activity, identity, generation, and relevance before enqueueing. See the [known recovery issue](#current-limits-and-verification) from the source check.
 
 Inbound defaults: 120 calls/second, burst 240, per-player **per transport family**; independent ByteNet buffer/reference byte allowances and 512 packet-wide reference nodes; SoNET application bytes 64 KiB/second, burst 128 KiB, with strict packed input/output 64 KiB, depth 16, 4,096 nodes, 2,048 collection entries, 256 references, 64 arguments. At most two guarded invokes/player are active across the shared guard state.
 
@@ -879,58 +877,63 @@ Core accepts no client remote Spawn/Hit/Destroy/Deflect/Patch/owner commands. Pa
 
 The Studio benchmark remote is Studio-only: exact known actions, 4 requests/second burst 8, weighted 96 emissions/second burst 192 charged before execution. Trusted heavier tests call server APIs directly; clients have no protection-disabling switch.
 
-These are boundary guardrails, **not a complete weapon anti-exploit system**. Validate equipped/alive state, cooldown, ammo, aim/origin, teams, damage and physical network ownership in authoritative ability code. Optional strict codec limits preserve legacy/default encoding calls; shared transport compatibility still needs real-game testing.
+Weapon code remains responsible for equipped/alive state, cooldown, ammo, aim/origin, teams, damage, and physical network ownership. Remote guards cover admission and decoding, not those permissions. Strict codec limits are optional arguments, preserving existing default encoding calls.
 
 ## Collision Backends And Dynamic Occupancy
 
-`SetCollisionMode(Mode, Options?)` sets Native (default), Auto, DDA, or Bolt. Definition/spawn/ProjectileSettings can override a projectile's mode. `GetCollisionInfo()` reports requested/resolved mode, thresholds, Bolt load status, and map Baked/Dirty/Truncated/Version/Coverage diagnostics. This is a broadphase/fallback optimization, not a new collision truth.
+`SetCollisionMode(Mode, Options?)` selects Native (default), Auto, DDA, or Bolt. Definitions, spawns, and ProjectileSettings can override it per projectile. These backends filter collision work; native casts still resolve contacts. `GetCollisionInfo()` reports requested/resolved mode, thresholds, Bolt load status, and map Baked/Dirty/Truncated/Version/Coverage diagnostics.
 
-Options: AutoPreferredMode DDA, AllowEmptySpaceSkip false, NativeTimeThreshold 0.00035 **seconds**, CastsPerFrameThreshold 500, DecisionInterval 0.5 seconds. Auto uses Core-local samples, not global Stats CPU. Modes and thresholds are not guarantees of a speedup.
+Defaults: AutoPreferredMode DDA, AllowEmptySpaceSkip false, NativeTimeThreshold 0.00035 seconds, CastsPerFrameThreshold 500, DecisionInterval 0.5 seconds. Auto uses Core-local cast measurements rather than global Stats CPU. Compare timings on the intended map before changing these thresholds.
 
 `BakeCollisionMap(Options?) -> info` accepts Root or Roots, CellSize (64), MaxParts (12,000), MaxCellsPerQuery (256), AnchoredOnly (true), TrackWorldChanges (true), optional synchronous ShouldIncludePart. Baking is opt-in and may be expensive; do it during loading, not per shot. `ClearCollisionMap()` clears grid/coverage/watchers and disables its dynamic occupancy tracking; it does not delete map geometry.
 
-**Current empty-space skipping requires verified Include-filter roots with complete coverage.** Ordinary Exclude/IgnoreList casts, incomplete/truncated roots, unverified Workspace/Terrain coverage and dirty maps fall back to native. Sphere/block/shapecasts remain native. DDA/Bolt do not magically accelerate every ordinary weapon merely because a map was baked.
+Empty-space skipping requires verified Include-filter roots with complete baked coverage. Ordinary Exclude/IgnoreList casts, incomplete or truncated roots, unverified Workspace/Terrain coverage, and dirty maps fall back to native. Sphere, block, and shape casts always remain native.
 
 Bolt loads lazily. Its candidate math can avoid confirmed-empty ray work under permitted coverage/skip settings; nonempty/unsafe cases still use native raycasts for actual contacts. Moving/static map changes can dirty coverage and disable skipping until rebaked. Keep TrackWorldChanges enabled unless you knowingly own all invalidation.
 
-`RegisterDynamicCollider(Collider : BasePart | Model) -> Handle` tracks explicitly moving geometry; the handle has idempotent Destroy. `UnregisterDynamicCollider(Collider)` removes explicit registration. The CollectionService tag `ProjectileCoreDynamicCollider` also tracks geometry; tagged objects stay tracked until their tag is removed. Character bounds are included through shared tracking. Occupancy updates at 15Hz, processes changed bounds, and expands with swept velocity. Register moving anchored obstacles; stale static occupancy is not a clever optimization.
+`RegisterDynamicCollider(Collider : BasePart | Model) -> Handle` tracks moving geometry; the handle has idempotent Destroy. `UnregisterDynamicCollider(Collider)` removes explicit registration. The CollectionService tag `ProjectileCoreDynamicCollider` also tracks geometry until the tag is removed. Shared tracking includes character bounds. Occupancy updates changed bounds at 15Hz and expands them using swept velocity. Register moving anchored obstacles so a static bake cannot incorrectly mark their path empty.
 
 ## Profiling And Parallel Runtime
 
 `SetPerformanceProfilingEnabled(Enabled, Options?)` toggles Core's internal profiling; options include MicroProfilerLabelsEnabled and StatsSamplingEnabled. `GetPerformanceStats()` returns rolling Metrics, Counters, frame summaries, broad Stats context, and Extra snapshots for active entries, caches, visual metadata, preparation, queries/homing schedule, network, fields, curves, groups/bursts, impacts, spatial indexing, dynamic occupancy and workers.
 
-This diagnostic getter enumerates current state. Sample it at a modest debug/UI rate, not once per projectile per frame. Profile labels include PCore.NativeCast, PCore.BoltQuery, PCore.BakedDDA, PCore.ActorBatch, PCore.AreaController and PCore.Replication. Stats values are broad context and may be unavailable/zero; they do not establish a zero-cost frame or decide collision mode by themselves.
+GetPerformanceStats enumerates current state, so sample it at a modest debug/UI rate rather than per projectile. Profile labels include PCore.NativeCast, PCore.BoltQuery, PCore.BakedDDA, PCore.ActorBatch, PCore.AreaController, and PCore.Replication. Stats provides broad runtime context; unavailable values may be zero and do not drive collision-mode selection.
 
-`SaveScriptProfilingData(FileName?) -> boolean, resultOrError` is an optional Studio-only helper. It does not make ScriptProfilerService a live gameplay dependency or guarantee every environment permits saving. Use MicroProfiler captures with labels for frame investigation.
+`SaveScriptProfilingData(FileName?) -> boolean, resultOrError` is a Studio-only helper. Availability and save permissions depend on the environment. Use labelled MicroProfiler captures to investigate frame cost; live gameplay does not depend on ScriptProfilerService.
 
-Network diagnostics are available through GetNetworkTransport/GetNetworkInfo and `GetPerformanceStats().Extra.Network`: resolved transport/packet limits, encoding/reuse/preparation time, queues/high-water/age, sync sent/deferred/budget saturation, fragmentation/reassembly, recovery requests/denials/build/latency, client inbox depth/age/drain/callback failures, plus fixed `RemoteGuards` rejection/throttling/decode/active-invoke counters. Counts and wall-time measurements are different things; do not label a queue wait as network RTT.
+Network diagnostics are available through GetNetworkTransport/GetNetworkInfo and `GetPerformanceStats().Extra.Network`: resolved transport/packet limits, encoding/reuse/preparation time, queues/high-water/age, sync sent/deferred/budget saturation, fragmentation/reassembly, recovery requests/denials/build/latency, client inbox depth/age/drain/callback failures, and fixed `RemoteGuards` rejection/throttling/decode/active-invoke counters. Queue age and receive-to-prepare time measure local processing delay, not network RTT.
 
 ### ConfigureParallel
 
-`ConfigureParallel(Mode, Options?)` supports Disabled, Auto (default), Enabled. **AutoReady is currently false: Auto remains serial pending parity/performance promotion.** Enabled explicitly requests the experimental server worker lane, still subject to worker initialization/availability and workload thresholds. It is not the recommended fix for a client inbox queue.
+`ConfigureParallel(Mode, Options?)` accepts Disabled, Auto (default), or Enabled. AutoReady is currently false, so Auto remains serial. Enabled requests the experimental server worker lane, subject to initialization, availability, and workload thresholds. Workers are server-side and do not change client inbox processing.
 
 Defaults: WorkerCount 8, MinimumEligibleProjectiles 256, EntryBudgetMilliseconds 1.5, ExitBudgetMilliseconds 0.75, MaximumStaleFrames 2. Workers perform eligible computation/casts; authoritative commits, callbacks and registry/replication remain serial. Failure/stale results fall back rather than resurrecting entries.
 
-The current eligibility check excludes client authority, physical entries, non-linear/Bezier, homing, controller/Attract/Wind state, clashes, gameplay-changing curves, separate humanoid sweeps, custom raycast/pierce callbacks, shapecast, raycast-deflection-enabled shots and bouncing. Since AllowRaycastDeflection defaults true, ordinary defaults do **not** automatically enter this lane. Do not change that gameplay setting only to win a synthetic benchmark.
+The worker lane excludes client authority, physical entries, non-linear/Bezier travel, homing, controller/Attract/Wind state, clashes, gameplay-changing curves, separate humanoid sweeps, custom raycast/pierce callbacks, shapecast, raycast-deflection-enabled shots, and bouncing. AllowRaycastDeflection defaults to true, so default shots are ineligible. Eligibility changes can affect gameplay; benchmark the settings the attack actually needs.
 
 ## Registry And Compatibility Helpers
 
 `GetData(Identifier)` returns a live entry or nil; `IsActive(Identifier)` checks current registry activity. `GetAll()` returns a **shallow copied map** of active entries: changing map membership cannot mutate the registry, but the entry values themselves are still live references. Use supported mutations instead of raw nested-state writes.
 
-`GetOwnerFromPart(Part : BasePart)` resolves a registered entry or the existing Creator-tag fallback. It is not proof that a client owns permission to fire or damage with that part.
+`GetOwnerFromPart(Part : BasePart)` resolves a registered entry or the existing Creator-tag fallback. It reports ownership, not weapon-use or damage permission.
 
 `DetectHumanoidsNearby(Origin, Range, IgnoreList, Owner?, Visualizer, IgnoreForceFields, IgnoreFriendly?, PartLimit?, VisualizerProperties?, UseRobloxQuery?) -> boolean, { Humanoid }` is a **game-integrated compatibility alias** to HumanoidDetection/Hitbox_Module, not the standalone package's native replacement. IgnoreList must be a table. IgnoreForceFields defaults true (exclude protected targets), IgnoreFriendly false, positive PartLimit caps results otherwise uncapped, UseRobloxQuery false uses the registry path. VisualizerProperties supports Color, Lifetime, Transparency. Supply the owner for the existing game allegiance rules; result order is not guaranteed.
 
-Use the alias only when that external integration is installed. Do not copy the old shorter positional signature from an unrelated UtilityFunctions helper and assume argument seven means the same thing. This is how a ForceField becomes a teammate by accident.
+This signature differs from similarly named UtilityFunctions helpers. Check positional arguments when migrating calls, particularly IgnoreForceFields and IgnoreFriendly.
 
 ## Current Limits And Verification
 
-- This reference describes the inspected integrated source, not an unpublished standalone refresh. There is no package download/source release in this repository yet.
-- Top-level Angles is not wired through the inspected public spawn/types surface despite internal renderer support. Runtime registration discovery is not an arbitrary recursive dependency loader. Neither limitation was repaired during documentation work.
-- ReplicateUserData is not a comprehensive privacy switch for UserData patches; see the explicit caveat above. Keep private server state outside replicated entry data.
-- Final readback caught a concurrent Replication edit that removed the RecoveryRecords initialization while leaving its increment in the recovery scheduler. That source needs repair before treating current recovery as operational; it still passes syntax compilation. The scheduler contract above describes the existing design, not a successful runtime retest of that edit. No Studio code was changed during this documentation pass.
-- Preloading, scheduled acquisitions, shared encoding, reusable filters and caches reduce particular costs. They do not establish a universal projectile capacity, latency bound, allocation-free loop, or leak-free game.
-- Recent eight-local-client tests delivered 48/48 projectile callbacks/visual releases per client through each transport, with zero reported send/flush failures and terminal queue/active-resource residue in that harness. They also saw receive-to-prepare delays up to about 1.55 seconds and high client frame intervals on the shared laptop. Hardware contention and inbox scheduling need isolated measurements; these results are not a normal-player latency guarantee.
-- Age-aware catch-up/budget-debt and cheaper InstantHit work discussed after that test are **proposals, not implemented fixes** in this baseline. Do not advertise them as shipped.
-- Serial/native remains the conservative default. DDA coverage restrictions and unpromoted Actor Auto are deliberate guardrails, not a promise that flipping a string doubles FPS.
-- Native syntax checks, callback-count harnesses and bounded cleanup cycles are narrower than manual appearance/jitter checks, adverse-network/device testing, long-duration memory certification or 16-player readiness. Measure those separately. No, multiplying an overloaded eight-client laptop result by two is not a benchmark.
+The 30 October source check found an uninitialized `RecoveryRecords` counter still incremented by the recovery scheduler. This can raise a runtime error despite passing syntax compilation. Recovery needs a code fix and a fresh test before relying on the scheduler described above.
+
+Other open limitations are [public Angles support](#angular-spin), [UserData patch privacy](#userdata), and direct-child-only registration loading. Actor Auto remains disabled. The older standalone export has not been updated to this API.
+
+In the eight-local-client delivery test, every client received 48 preparations, hits, destroy notifications, and visual releases through each transport. Both rounds ended with no reported callback/send/flush failures, inbox residue, or retained visual leases.
+
+| Transport | Per-client receive-to-prepare maximum |
+| --- | --- |
+| ByteNet | 248-1,205 ms |
+| SoNET | 291-1,549 ms |
+
+All sessions shared one laptop. Client Heartbeat p95 ranged from 63-88 ms in the ByteNet round and 100-122 ms in the SoNET round. These tests confirmed delivery counts, but did not isolate the cause of the processing delay or establish 16-player performance. Age-aware inbox catch-up, budget-debt handling, and cheaper InstantHit processing remain planned work.
+
+The examples passed syntax compilation, not full type checking or gameplay execution. Manual visual checks, adverse-network testing, and long-duration memory testing remain separate work.
