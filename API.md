@@ -1,10 +1,37 @@
 # ProjectileCore API Reference
 
-Long-form reference for ProjectileCore: registration, simulated projectiles, physical projectiles, homing, Bezier travel, deflection, attraction, area controllers, control immunity, networking, visual setup, and performance behavior.
+API reference for the integrated `ProjectileSystem_Test` build, checked on **30 October 2026**. See the [README](./README.md) for setup, package status, and server/client registration examples.
 
-This is fine.
+## Contents
 
-## Require Path
+- [Setup, Authority, And Types](#setup-authority-and-types)
+- [Public API Index](#public-api-index)
+- [Registration And Spawn Settings](#registration-and-spawn-settings)
+- [World Collision And Bouncing](#world-collision-and-bouncing)
+- [Callbacks And Terminal Lifetime](#callbacks-and-terminal-lifetime)
+- [Preparation And Cache Ownership](#preparation-and-cache-ownership)
+- [Bursts And Patterns](#bursts-and-patterns)
+- [Projectile Groups](#projectile-groups)
+- [Movement, Ownership, And Patching](#movement-ownership-and-patching)
+- [Safe Phase Transitions](#safe-phase-transitions)
+- [Homing And Bezier Travel](#homing-and-bezier-travel)
+- [Deflection And Shields](#deflection-and-shields)
+- [Area Controllers](#area-controllers)
+- [Control Immunity](#control-immunity)
+- [Projectile Clashes](#projectile-clashes)
+- [Impact Context And Attachments](#impact-context-and-attachments)
+- [Distance And Age Curves](#distance-and-age-curves)
+- [Physical Projectiles](#physical-projectiles)
+- [Visuals And Effects](#visuals-and-effects)
+- [Networking, User Data, And Recovery](#networking-user-data-and-recovery)
+- [Collision Backends And Dynamic Occupancy](#collision-backends-and-dynamic-occupancy)
+- [Profiling And Parallel Runtime](#profiling-and-parallel-runtime)
+- [Registry And Compatibility Helpers](#registry-and-compatibility-helpers)
+- [Current Limits And Verification](#current-limits-and-verification)
+
+## Setup, Authority, And Types
+
+The integrated build uses `ReplicatedStorage.ModuleScripts.ProjectileCoreSystem.ProjectileCore` and its game-specific dependencies. The examples assume those are installed.
 
 ```lua
 local ReplicatedStorage = game:GetService("ReplicatedStorage");
@@ -12,541 +39,575 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage");
 local ProjectileCore = require(ReplicatedStorage["ModuleScripts"]["ProjectileCoreSystem"]:WaitForChild("ProjectileCore"));
 ```
 
-## Authority Model
+Require on the server and each client. Register gameplay settings on the server and matching visual names/templates on clients. Definitions are runtime-local; registering a client template does not configure the server's collision shape.
 
-`Authority = "Server"` means the server owns hit detection, deflection, redirects, ownership, time-scale changes, damage callbacks, and destroy state. Clients can register the same projectile name with visual settings so replicated spawns render locally.
+`Authority = "Server"` uses server simulation for gameplay and client replicas for presentation. `Authority = "Client"` is for local effects or previews. Authority defaults to the executing side; setting it to Server in a LocalScript does not request a server spawn.
 
-`Authority = "Client"` means the local machine owns simulation and hit callbacks. Use this for cosmetic projectiles, local previews, or benchmark tests. Do not use client authority for real damage unless the server validates the result.
+The root exports Luau types and exposes the shared module through `ProjectileCore["Types"]`. Use direct-require type aliases in ordinary consumers. Registration factories run during root initialization, so require `Shared.Types` there to avoid a circular dependency. See the [client registration example](./README.md#client-visual-registration).
 
-Server-authority client replicas are visual-only. They render spawn, deflect, redirect, patch, state-sync, area-controller, and destroy updates from the server.
+Module functions use dot-call semantics; handle methods use colons. The examples use bracket access for named fields. Some configuration and diagnostic types remain dynamic.
 
-## Package Layout
+## Public API Index
 
-```text
-ReplicatedStorage
-  ModuleScripts
-    ProjectileCoreSystem
-      ProjectileCore
-        Network
-        Objects
-          Projectiles
-        Physical
-        Shared
-        Simulated
-        Simulators
-```
-
-Projectile presets normally live at:
+`nil` below means the function has no success return. Creation and configuration calls can assert on invalid input; many mutations ignore missing or ended IDs. Functions returning boolean/reason report rejection explicitly.
 
 ```text
-ProjectileCore.Objects.Projectiles.<ProjectileName>
+RegisterProjectile(Name, Definition?) -> RegisteredProjectileDefinition
+PreloadProjectile(Name, Options?) -> PreparationResult
+GetProjectileCacheStats(Name) -> ProjectileCacheStats?
+SpawnSimulated(Name, SpawnInformation) -> string, SimulatedProjectileEntry
+SpawnPhysical(Projectile, SpawnInformation) -> string, PhysicalProjectileEntry
+SpawnBurst(Name, BurstInformation) -> BurstHandle
+CreateProjectileGroup(GroupInformation?) -> ProjectileGroupHandle
+TransitionProjectile(Identifier, Information) -> boolean, string?
+GetProjectilePhase(Identifier) -> ProjectilePhaseStatus?
+SetProjectileCurves(Identifier, Curves?, ShouldBroadcast?) -> boolean, string?
+ResetProjectileCurves(Identifier, ShouldBroadcast?) -> boolean, string?
+GetCurveValue(IdentifierOrEntry, Name) -> number?
+GetProjectileCurveState(IdentifierOrEntry) -> ProjectileCurveState?
+GetImpactContext(Entry) -> ProjectileImpactContext?
+GetImpactCFrame(Context, Placement?) -> CFrame
+AttachImpact(Context, Template, Options?) -> ImpactHandle?, string?
+SetDeflectionPartConfig(PartOrModel, Config) -> nil
+GetDeflectionPartConfig(PartOrModel) -> DeflectionPartConfig?
+ClearDeflectionPartConfig(PartOrModel) -> nil
+Deflect(Identifier, Parameters, ShouldBroadcast?) -> nil
+DeflectArea(Parameters) -> { BasePart }
+AttractArea(Information) -> { ProjectileEntry }
+CreateAreaController(Information) -> AreaControllerHandle
+Redirect(Identifier, Velocity, Position?, Acceleration?, IgnoreList?, ShouldBroadcast?) -> nil
+SetHoming(Identifier, HomingData?, ShouldBroadcast?) -> nil
+SetOwner(Identifier, Owner?) -> nil
+GetOwner(Identifier) -> Instance?
+SetControlImmunity(Identifier, ImmunityPatch, ShouldBroadcast?) -> nil
+SetTimeScale(Identifier, Scale, ShouldBroadcast?) -> nil
+PatchProjectile(Identifier, PatchData, ShouldBroadcast?) -> nil
+Cancel(Identifier, Reason?) -> nil
+DestroyProjectile(Identifier, Reason?) -> nil
+GetData(Identifier) -> ProjectileEntry?
+GetAll() -> { [string] : ProjectileEntry }
+IsActive(Identifier) -> boolean
+GetOwnerFromPart(Part) -> Instance?
+SetNetworkTransport(Mode?) -> nil
+GetNetworkTransport() -> table
+GetNetworkInfo() -> table
+SetPerformanceProfilingEnabled(Enabled, Options?) -> nil
+GetPerformanceStats() -> table
+SaveScriptProfilingData(FileName?) -> boolean, any
+ConfigureVisualBudget(Options?) -> nil
+SetCollisionMode(Mode, Options?) -> nil
+BakeCollisionMap(Options?) -> table
+ClearCollisionMap() -> nil
+GetCollisionInfo() -> table
+RegisterDynamicCollider(Collider) -> DynamicColliderHandle
+UnregisterDynamicCollider(Collider) -> nil
+ConfigureProjectileCollisions(Options?) -> nil
+ConfigureParallel(Mode, Options?) -> nil
+DetectHumanoidsNearby(Origin, Range, IgnoreList, Owner?, Visualizer, IgnoreForceFields, IgnoreFriendly?, PartLimit?, VisualizerProperties?, UseRobloxQuery?) -> boolean, { Humanoid }
 ```
 
-A preset can be a direct `BasePart`, a `Model` with `PrimaryPart`, or a `ModuleScript` returning projectile/cache data. Unless somebody shoved the template in a random folder and then asked why cache is nil.
+`DestroyProjectile` aliases `Cancel`; `GetNetworkInfo` aliases `GetNetworkTransport`. `Types` exposes shared types. Underscored fields, worker buffers, numeric network IDs, control snapshots, and recovery remotes are internal and may change.
 
-## Core API
+## Registration And Spawn Settings
 
-```text
-ProjectileCore.RegisterProjectile(ProjectileName, ProjectileDefinition?) -> RegisteredProjectileDefinition
-ProjectileCore.SpawnSimulated(ProjectileName, SpawnInformation) -> Identifier, Entry
-ProjectileCore.SpawnPhysical(ProjectileInstance, SpawnInformation) -> Identifier, Entry
-ProjectileCore.Deflect(Identifier, DeflectionParams, ShouldBroadcast?)
-ProjectileCore.Redirect(Identifier, NewVelocity, NewPosition?, NewAcceleration?, NewIgnoreList?, ShouldBroadcast?)
-ProjectileCore.DeflectArea(DeflectionParams) -> { BasePart }
-ProjectileCore.AttractArea(AttractParams) -> { ProjectileEntry }
-ProjectileCore.CreateAreaController(ControllerInformation) -> AreaControllerHandle
-ProjectileCore.SetControlImmunity(Identifier, ImmunityPatch, ShouldBroadcast?)
-ProjectileCore.SetHoming(Identifier, HomingData?, ShouldBroadcast?)
-ProjectileCore.SetOwner(Identifier, NewOwner?)
-ProjectileCore.GetOwner(Identifier) -> Instance?
-ProjectileCore.SetTimeScale(Identifier, SpeedScale, ShouldBroadcast?)
-ProjectileCore.PatchProjectile(Identifier, PatchData, ShouldBroadcast?)
-ProjectileCore.Cancel(Identifier, Reason?)
-ProjectileCore.DestroyProjectile(Identifier, Reason?)
-ProjectileCore.GetData(Identifier) -> ProjectileEntry?
-ProjectileCore.GetAll() -> { [string] : ProjectileEntry }
-ProjectileCore.IsActive(Identifier) -> boolean
-ProjectileCore.GetOwnerFromPart(Part) -> Instance?
-ProjectileCore.SetNetworkTransport("Auto" | "ByteNet" | "SoNET")
-ProjectileCore.GetNetworkTransport() -> table
-ProjectileCore.GetNetworkInfo() -> table
-```
+### RegisterProjectile
 
-| Function | What It Does | Notes |
-| --- | --- | --- |
-| `RegisterProjectile` | Stores defaults for one projectile name. | Safe on server and client. Same name should be registered on both sides for replicated visuals. |
-| `SpawnSimulated` | Creates a fixed-step simulated projectile. | Best for bullets, missiles, Bezier, homing, droplets, and controlled orbit shots. |
-| `SpawnPhysical` | Registers an existing BasePart or Model. | Best for Roblox physics/mover-driven objects. |
-| `Deflect` | Redirects one active projectile. | Supports reflect, return, locate, lob, or direct velocity. |
-| `Redirect` | Recasts from a new position/velocity/acceleration. | Good for delayed launch, manual course correction, or post-phase arming. |
-| `DeflectArea` | Deflects projectiles inside a volume. | Uses group/priority locks to prevent controller slap-fights. |
-| `AttractArea` | Applies vortex/blackhole steering. | Can affect simulated and physical entries. |
-| `CreateAreaController` | Persistent Orbit/Tornado/FrozenMoment controller. | Uses Motion and Time conflict lanes. |
-| `SetControlImmunity` | Runtime patch for CC immunity. | Releases blocked area-controller captures when immunity changes. |
-| `SetHoming` | Adds/replaces/disables homing. | Can be delayed after spawn. |
-| `SetOwner` / `GetOwner` | Owner/damage-credit management. | Use this instead of raw entry mutation. |
-| `SetTimeScale` | Simulation speed scaling. | Fully paused projectiles skip movement raycasts. |
-| `PatchProjectile` | Validated live simulated field patching. | Do not mutate random nested fields unless you enjoy cursed bugs. |
-| `Cancel` / `DestroyProjectile` | Cleanup/despawn. | `DestroyProjectile` is an alias for intent clarity. |
+`RegisterProjectile(Name : string, Definition? : ProjectileDefinition)` registers or replaces defaults on the current side and returns the resolved definition. Spawning an unknown name creates a default registration; explicit registration is recommended so missing settings are easier to catch.
 
-## RegisterProjectile
+Presets under `Objects.Projectiles.<Name>` can supply a BasePart, Model, or ModuleScript-based projectile/cache record. A Model needs a resolvable BasePart, preferably an intentional PrimaryPart. Use separate client visual templates, not a live character assembly.
+
+Spawn overrides leave the registered definition unchanged. Resolution is field-specific: nested projectile settings, immunity, replication policy, and clash settings each have their own merge rules. Explicit false is respected where supported. Configuration and UserData tables should be acyclic.
+
+### SpawnSimulated
+
+`SpawnSimulated(Name : string, SpawnInformation : SimulatedSpawnInfo)` returns an ID and its entry. Give `Velocity : Vector3`, or `Direction : Vector3` plus optional `Speed`. Position and vectors must be finite. `Direction` is normalized; a near-zero direction falls back to local/world forward `(0, 0, -1)`.
+
+| Setting | Default / meaning |
+| --- | --- |
+| `Position`, alias `StartingPosition` | Vector3.zero if omitted. Supply an actual muzzle position rather than relying on this. |
+| `Velocity` | Takes precedence over Direction/Speed; required unless Direction is provided. |
+| `Speed` | 125 when resolving Direction; not a replacement for an omitted Direction/Velocity. |
+| `Acceleration` | Vector3.zero; studs/second squared. Gravity is opt-in. |
+| `Creator` | Resolved current/original owner. A Player resolves to its Character when available. |
+| `IgnoreList` | Flat Instance array, copied; resolved owner is also excluded. Nested arrays are not flattened. |
+| `Authority` | Executing side, Server or Client. |
+| `Group` | Optional runtime-local group handle. Never replicated. |
+| `UserData` | Dynamic ability data; see replication/privacy below. |
+| `HomingData` | Optional homing configuration. |
+| `TravelMode`, `TravelData` | Linear by default; Bezier settings below. |
+| `ProjectileIdentifier` | Optional public ID; an already-active ID returns that existing entry, not a second independent shot. Omit for normal spawning; bursts prohibit it. |
+| `SkipReplication` | Optional suppression for a server spawn; not a client permission switch. |
+
+Common definition/spawn settings:
+
+| Setting | Default / contract |
+| --- | --- |
+| `ProjectileTemplate`, `ProjectileCache` | Optional visual template/custom cache. Standard Core cache is preferred for preparation/stats. |
+| `ProjectileCacheWarmCount` | 10. Configures warm minimum, not an active-projectile cap. |
+| `ProjectileCacheMaxSize` | Idle retention defaults to max(64, warm count); explicit limits cannot be below warm minimum. |
+| `CacheWarmMode` | Definition setting: Immediate; Background registers immediately and warms over later Heartbeats. |
+| `CreateProjectilePart` | true. false skips the visual, not gameplay simulation. |
+| `ProjectilePartParent` | Optional visual container. Do not use an assembly that would drag gameplay objects. |
+| `PrepareProjectilePart`, `OnPartEnd`, `EffectPolicy` | Visual initialization, retention, and managed effects. |
+| `TimeScale` | 1; simulated values must be nonnegative. |
+| `CollisionEnabled` | true. false disables world contacts, close-hit probing, and projectile clashes while motion/lifetime continue. |
+| `CollisionMode` | Inherit backend; backend starts Native. |
+| `SimulationStepMode` | Legacy. Auto permits the eligible optimized linear path; it is not Actor dispatch. |
+| `AllowEmptySpaceSkip` | Opt-in override, otherwise backend setting; requires verified baked coverage. |
+| `SpherecastRadius`, `BlockcastSize`, `UseShapecast` | No sphere/block volume, false shapecast. Only one world volume may be active. |
+| `HumanoidSpherecastRadius` | nil/0: ordinary world cast behavior. Positive enables the separate living-character sweep. |
+| `IgnoreWater` | false. |
+| `Bounce`, `ProjectileCollision`, `Curves` | Opt-in configurations below. |
+| `AngularSpin`, `SpinStrength`, `SpinDirection` | false, 0 degrees/second, absent local-forward axis. |
+| `AllowRaycastDeflection`, `MaxDeflections` | true, 24. |
+| `ControlImmunity` | Empty by default; definition plus spawn overrides. |
+| `ReplicateToClients` | true for server spawns unless suppressed. |
+| `ReplicateHitInfo` | false; additional impact metadata is opt-in. |
+| `ReplicateUserData`, `ReplicatedUserData` | true, nil; sanitized UserData is the default simulated sidecar. |
+| `ReplicationSyncInterval` | 0.08 seconds; 0 disables ordinary periodic correction. Forced lifecycle corrections still exist. |
+| `ReplicationSmoothTime`, `ReplicationSnapDistance` | 0.1 seconds, 60 studs. |
+| `ReplicationPolicy` | Automatic relevance, owner always relevant, instant-hit visuals enabled. |
+| `AllowVisualBudget` | false; client particle/light distance budgeting opt-in. |
+
+`ProjectileSettings` defaults: `MaxFlyTime = 10`, `MaxFlyDistance = 5000`, `RaysPerMove = 8`, `MaxPiercesPerStep = 8`. It also accepts `CollisionMode`, `CollisionEnabled`, `AllowEmptySpaceSkip`, `BlockcastSize`, and close-hit fields. Prefer the documented top-level collision/snap settings for spawn/patch overrides; inspect field precedence rather than supplying contradictory copies in several places. Total flight limits are not reset by phases or curve resets.
+
+## World Collision And Bouncing
+
+### Cast Volumes
+
+Rays are the default. Choose **one** active world-volume setting: `SpherecastRadius > 0`, positive `BlockcastSize : Vector3`, or `UseShapecast = true`. Conflicting final settings assert at registration/spawn/patch. Sphere radius and block components are validated up to 512; block components must be positive. Shapecast needs usable geometry. Block orientation follows movement-facing cast state.
+
+`HumanoidSpherecastRadius` is a separate positive sphere sweep for living characters, not a second world-volume selector. For example, world sphere radius 5 plus humanoid radius 15 allows generous character hits without hitting a wall with the 15-stud sphere. Dead-character geometry uses the ordinary world path. This feature is incompatible with a custom `RaycastFunction`; it does not add stationary overlap detection.
+
+`CollisionEnabled = false` still advances movement, controls, age/distance, and lifetime. Ability-owned hitboxes are unaffected. Re-enabling collision starts swept checks from the current position, without checking the disabled path retroactively.
+
+Returning true from `CanPierce(Entry, SwiftProjectile, HitResult)` continues through a contact. Shield deflection is checked first. For repeated proximity damage, use an ability-owned server hitbox rather than terminal-hit callbacks.
+
+### Close-Hit Snap
+
+Defaults are `SnapHitEnabled = true`, `SnapHitDistance = 12`, and `SnapHitTime = 0.05`. The first step probes the smaller distance/time window and resolves an immediate terminal hit before visible travel. A miss leaves position unchanged and fires no callbacks. The probe uses the existing cast, deflection, and hit-cleanup paths.
+
+Core disables the inherited snap default when a custom `CanPierce` exists. An explicit spawn `SnapHitEnabled`, including the ProjectileSettings override, takes precedence. Forcing it on allows the early probe to run the piercing callback. Raw SwiftCast defaults to snap disabled. This feature is simulated-only.
+
+### Bounce
+
+Provide `Bounce = { ["Enabled"] = true; ... }` on a simulated definition/spawn/patch:
+
+| Field | Default |
+| --- | --- |
+| `MaximumBounces` | 4 |
+| `Restitution` | 0.65 |
+| `SurfaceFriction` | 0.1 |
+| `MinimumBounceSpeed` | 12 |
+| `MaximumBouncesPerStep` | 2 |
+| `SeparationDistance` | 0.03 |
+| `MaterialRestitution` | Optional Enum.Material-to-number overrides |
+| `CanBounce` | Optional synchronous `(Entry, HitResult, IncomingVelocity) -> boolean` |
+| `OnBounce` | Optional protected notification `(Entry, HitResult, NewVelocity, BounceCount)` |
+
+Terrain and non-humanoid geometry are eligible by default; humanoids need explicit CanBounce approval. Contact order is deflection, piercing, then bounce or terminal hit. Bounce count, minimum speed, insufficient progress, and repeated corner contacts can end a shot. Successful bounces are not terminal impacts. Physical projectiles use Roblox's native collision and bounce behavior.
+
+## Callbacks And Terminal Lifetime
+
+| Callback | Arguments / role |
+| --- | --- |
+| `PrepareProjectilePart` | `(Entry, ProjectilePart, Context)`; Context has Position, Authority, ProjectileName. Initial placement is valid before this runs. Keep it fast and non-yielding. |
+| `OnServerHit`, `OnClientHit` | `(Entry, HitResult?, Reason, ImpactContext?)`; terminal Hit notification on the relevant side. |
+| `OnServerDestroy`, `OnClientDestroy` | `(Entry, Reason, ImpactContext?)`; terminal reason may be cancellation, timeout, clash, or other cleanup, not just a world hit. |
+| Spawn `OnDestroy` | Entry-level `(Entry, Reason, ImpactContext?)` notification in addition to side-specific destruction. |
+| `OnPositionChange` | Simulated `(Entry, Position, LastPosition)`; frequent movement notification. Keep work here small and non-yielding. |
+| `CanPierce` | `(Entry, SwiftProjectile, HitResult) -> boolean`; synchronous collision decision. |
+| `RaycastFunction` | `(Entry, Origin, Displacement, RaycastParams) -> RaycastResult?`; synchronous replacement query. |
+| `OnDeflect` | `(Entry, Deflector?)`; notification, not permission to choose a different committed collision. |
+| Spawn `OnOwnerChanged` | `(Entry, NewOwner?)`. Actual owner changes detach group membership before notification. |
+| `OnPartEnd` | `(ProjectilePart, Reason, Cleanup, ImpactContext?)`; retain the leased visual for a deliberate fade, then call Cleanup. |
+
+Decision hooks must not yield: this includes piercing, raycast, bounce/clash eligibility, and allegiance predicates. Protected terminal notifications run independently from mandatory cleanup. Hit is invoked before destroy in that notification chain, but active registry/cache ownership does not wait for a yielded user callback. An entry retained by a callback is not an active visual lease.
+
+`Cleanup()` is idempotent. Call it when an OnPartEnd fade finishes; Core forces cleanup after eight seconds if it was missed. Warmup and deferred work check the visual lease before touching a recycled object. Terminal callbacks should use captured data rather than continue moving a Part that may already be back in the cache.
+
+On replicated server hits, **`Reason == "Hit"` does not guarantee a non-nil HitResult**. `ReplicateHitInfo` defaults false. For authoritative contact position/normal/material/local target placement, opt in on the server, then prefer `ImpactContext`. A reconstructed client hit record is not a guarantee of a native RaycastResult userdata or an available streamed Instance.
 
 ```lua
-ProjectileCore.RegisterProjectile("ProjectileName", {
-	["ProjectileTemplate"]       = Template;
-	["ProjectileCacheWarmCount"] = 32;
-	["CreateProjectilePart"]     = true;
-	["ProjectilePartParent"]     = Workspace["ProjectileVisuals"];
-	["ReplicateToClients"]       = true;
-	["SpherecastRadius"]         = 3;
-	["UseShapecast"]             = false;
-	["AllowRaycastDeflection"]   = true;
-	["MaxDeflections"]           = 24;
-	["Authority"]                = "Server";
+local function OnClientHit(Entry : ProjectileCore.SimulatedProjectileEntry, HitResult : RaycastResult?, Reason : string, Context : ProjectileCore.ProjectileImpactContext?) : ()
+	if Reason ~= "Hit" then return; end;
 
-	["ControlImmunity"] = {
-		["Attract"] = true;
-	};
+	local Position = if Context then Context["Position"] elseif HitResult then HitResult["Position"] else Entry["Simulated"]["Position"];
+	if typeof(Position) ~= "Vector3" then return; end;
 
-	["ProjectileSettings"] = {
-		["MaxFlyTime"]     = 10;
-		["MaxFlyDistance"] = 5000;
-		["RaysPerMove"]    = 8;
-	};
-});
-```
-
-### Registration Settings
-
-| Setting | Type | Default | Description |
-| --- | --- | --- | --- |
-| `ProjectileTemplate` | `BasePart` or `Model` | preset lookup | Visual template used for projectile parts. |
-| `ProjectileCache` | cache object | internal cache | Optional explicit object cache. |
-| `ProjectileCacheWarmCount` | `number` | `10` | Number of cached objects pre-created. |
-| `ProjectilePartParent` | `Instance` | `Workspace` | Parent for active projectile visuals. |
-| `CreateProjectilePart` | `boolean` | `true` | Creates visual part/model when true. |
-| `ProjectileSettings` | `table` | default settings | Lifetime and cast stepping settings. |
-| `EffectPolicy` | `table` | nil | Managed effect toggling policy. |
-| `PrepareProjectilePart` | `function` | nil | Runs after initial CFrame/transform is valid. |
-| `OnPartEnd` | `function` | nil | Custom visual cleanup before cache return/destroy. |
-| `ControlImmunity` | `table` | nil | Default guardrail against deflect/attract/area control systems. |
-| `SpherecastRadius` | `number` | nil | Uses spherecast when greater than zero. |
-| `UseShapecast` | `boolean` | `false` | Uses projectile part/model shape where supported. |
-| `IgnoreWater` | `boolean` | `false` | Raycast water behavior. |
-| `AllowRaycastDeflection` | `boolean` | `true` | Allows automatic `CanDeflect` hit deflection. |
-| `MaxDeflections` | `number` | `24` | Maximum deflections before final handling. |
-| `ReplicateToClients` | `boolean` | `true` | Server broadcasts simulated spawns/runtime changes. |
-| `Authority` | `"Server"` or `"Client"` | context-based | Simulation owner. |
-| `TimeScale` | `number` | `1` | Initial simulation speed multiplier. |
-| `TravelMode` | `string` | `"Linear"` | `Linear`, `QuadraticBezier`, or `CubicBezier`. |
-| `TravelData` | `table` | nil | Bezier target/control/duration settings. |
-| `HomingData` | `table` | nil | Initial homing settings. |
-| `UserData` | `table` | nil | Custom data copied onto entries. |
-
-### Callbacks
-
-| Callback | Runs On | Purpose |
-| --- | --- | --- |
-| `PrepareProjectilePart(Entry, ProjectilePart, Context)` | Side where visual part exists | Final setup after initial transform/CFrame is correct and before managed effects turn on. |
-| `OnPartEnd(Part, Reason, Cleanup)` | Side where visual part exists | Impact hold, fade, shrink, trail cleanup, cache return timing. |
-| `OnServerHit(Entry, HitResult, Reason)` | Server | Authoritative damage/explosion/status logic. |
-| `OnClientHit(Entry, HitResult, Reason)` | Client | Cosmetic impact response or client-authority hit behavior. |
-| `OnServerDestroy(Entry, Reason)` | Server | Cleanup after cancel, timeout, distance limit, or hit. |
-| `OnClientDestroy(Entry, Reason)` | Client | Visual cleanup for replicated/client-owned projectiles. |
-| `OnPositionChange(Entry, Position, LastPosition)` | Simulation owner/visual replica | Lightweight orientation or visual follow logic. |
-
-Keep `OnPositionChange` lean. If it allocates tables, scans folders, emits particles, and calls three remotes per step, the profiler will arrive with a clipboard.
-
-## SpawnSimulated
-
-```lua
-local Identifier, ProjectileEntry = ProjectileCore.SpawnSimulated("Bullet", {
-	["Position"]         = Muzzle["WorldPosition"];
-	["Velocity"]         = Muzzle["WorldCFrame"]["LookVector"] * 420;
-	["Acceleration"]     = Vector3.zero;
-	["Creator"]          = Character;
-	["IgnoreList"]       = { Character; Tool; };
-	["Authority"]        = "Server";
-	["SpherecastRadius"] = 2.5;
-	["Angles"]           = CFrame.Angles(0, math.rad(90), 0);
-});
-```
-
-### Spawn Settings
-
-| Setting | Type | Description |
-| --- | --- | --- |
-| `Position` / `StartingPosition` | `Vector3` | Initial world position. |
-| `Velocity` | `Vector3` | Initial velocity. If absent, `Direction` plus `Speed` is used. |
-| `Direction` | `Vector3` | Direction used with `Speed`. |
-| `Speed` | `number` | Magnitude used with `Direction`. |
-| `Acceleration` | `Vector3` | Constant acceleration, such as gravity. |
-| `Creator` | `Instance` | Owner source, usually Player, Character, Tool, or NPC Model. |
-| `IgnoreList` | `{ Instance }` | Cast exclusions. |
-| `Authority` | `"Server"` or `"Client"` | Explicit authority override. |
-| `ProjectileIdentifier` | `string` | Optional custom identifier. |
-| `SkipReplication` | `boolean` | Prevents server spawn broadcast for this projectile. |
-| `UserData` | `table` | Custom data stored on `Entry.UserData`. |
-| `ControlImmunity` | `table` | Spawn-level immunity override/patch over definition defaults. |
-| `HomingData` | `table` | Initial homing state. |
-| `TravelMode` | `string` | Travel mode for this shot. |
-| `TravelData` | `table` | Bezier/travel data for this shot. |
-| `Angles` | `CFrame` | Orientation offset applied to direction-facing visuals when wired into the simulated data. |
-| `AttractState` | `table` | Advanced attraction state; usually use `AttractArea`. |
-| `CanPierce` | `function` | Return true to continue through a hit. |
-| `RaycastFunction` | `function` | Custom cast function override. |
-
-The returned `Identifier` is the safe handle for later APIs. The returned `Entry` is useful in callbacks and inspection, but runtime mutation should go through `PatchProjectile`, `Redirect`, `SetHoming`, `SetOwner`, or `SetControlImmunity`.
-
-## ProjectileSettings
-
-```lua
-["ProjectileSettings"] = {
-	["MaxFlyTime"]        = 8;
-	["MaxFlyDistance"]    = 2500;
-	["RaysPerMove"]       = 8;
-	["MaxPiercesPerStep"] = 8;
-};
-```
-
-| Setting | Type | Description |
-| --- | --- | --- |
-| `MaxFlyTime` | `number` | Seconds before auto-destroy due to lifetime. |
-| `MaxFlyDistance` | `number` | Studs before auto-destroy due to travelled distance. |
-| `RaysPerMove` | `number` | Compatibility alias for `MaxPiercesPerStep`. |
-| `MaxPiercesPerStep` | `number` | Maximum hit/pierce checks per fixed step. |
-
-## Close-Hit Snap
-
-Close-hit snap is intended to resolve very short spawn-time hits before the projectile gets its first rendered travel frame.
-
-```lua
-ProjectileCore.RegisterProjectile("PointBlankBolt", {
-	["SnapHitEnabled"]  = true;
-	["SnapHitDistance"] = 12;
-	["SnapHitTime"]     = 0.05;
-});
-```
-
-| Setting | Type | Intended Default | Description |
-| --- | --- | --- | --- |
-| `SnapHitEnabled` | `boolean` | `true` through ProjectileCore | Enables first-step close-hit precheck. |
-| `SnapHitDistance` | `number` | `12` | Max studs for close-hit snap. |
-| `SnapHitTime` | `number` | `0.05` | Predicted travel window for the precheck. |
-
-Custom `CanPierce` projectiles should not use snap by default unless the source explicitly supports it.
-
-## EffectPolicy And PrepareProjectilePart
-
-ProjectileCore can keep managed effects disabled until the initial CFrame/transform is valid, then run `PrepareProjectilePart`, then enable allowed effects.
-
-```lua
-["EffectPolicy"] = {
-	["ManagedClasses"] = { "ParticleEmitter"; "Trail"; "Light"; };
-
-	["Allow"] = {
-		["Classes"] = { "ParticleEmitter"; "Trail"; };
-		["Names"]   = { "MuzzleTrail"; };
-	};
-
-	["Deny"] = {
-		["Names"] = { "DoNotAutoEnable"; };
-	};
-
-	["AutoEnable"] = true;
-};
-```
-
-```lua
-["PrepareProjectilePart"] = function(ProjectileEntry, ProjectilePart : BasePart, Context)
-	ProjectilePart["Transparency"] = 0;
-	ProjectilePart["Color"]        = Color3.fromRGB(255, 230, 120);
+	--// Ability-owned impact effects belong here; damage belongs on the server.
 end;
 ```
 
-`PrepareProjectilePart` is the correct place to enable mesh/material/visibility setup. Do not manually enable trails at the template origin before ProjectileCore sets the first transform unless you want a trail line from Narnia or wtever.
+The tracked position fallback above is not necessarily the surface contact point of a volume cast. Use the optional metadata when that distinction matters.
 
-## HomingData
+## Preparation And Cache Ownership
+
+`PreloadProjectile(Name, Options?) -> PreparationResult` yields until its shared preparation job finishes or fails. The name must already be registered **on this side** with a Core visual cache/template. Missing registrations/templates/custom unsupported caches return a result with `CacheReady = false` and `CacheError`; they do not create an active shot.
+
+Options: `WarmCount` defaults to the registered warm count; `PreloadAssets` defaults true, but only clients request asset loading. Warm toward a minimum **available** count, coalesce concurrent jobs, and obey retention. The shared clone step uses a 1ms/four-object soft frame budget; one clone itself cannot be interrupted.
+
+| Result fields | Meaning |
+| --- | --- |
+| `ProjectileName`, `CacheReady`, `CacheError`, `Available` | Cache identity/readiness and idle availability. |
+| `MetadataReady`, `MetadataAvailable` | Prepared visual metadata availability. |
+| `AssetsRequested`, `AssetsReady`, `AssetFailures`, `AssetError` | Separate client asset outcome; failures contain Asset and Enum.AssetFetchStatus. Server cache readiness does not mean clients loaded assets. |
+| `RequestedWarmCount`, `TargetWarmCount`, `LimitedByRetention`, `ElapsedSeconds` | Effective target/cap and elapsed wall time. |
+
+`GetProjectileCacheStats(Name)` returns nil without a Core cache; otherwise it returns Available, InUse, PendingWarmCount, RetentionLimit, EmptyCacheCreations, TotalCreated/Destroyed, HighWaterCreated, MaxSize, MetadataAvailable, CreationSeconds, and MaximumCreationSeconds. Available objects are retained for reuse; InUse tracks active leases.
+
+Idle retention is not an active-shot cap. Surplus idle visuals become eligible for trimming after ten seconds through shared bounded maintenance. Ordinary firing can proceed during background warming and may create cache misses. Preparation does not reserve a position, start age/lifetime, enable effects, or send a spawn packet. Run it in loading/ability preparation, not receive/movement/hit handlers.
+
+## Bursts And Patterns
+
+`SpawnBurst(Name, Information)` emits simulated projectiles through the usual spawn, collision, and replication paths. It handles patterns and scheduling; each shot still has its own simulation and network cost. Cancelling the burst stops pending emissions only.
+
+| Field | Default / contract |
+| --- | --- |
+| `Origin` | Required CFrame, BasePart, or Attachment. Generated shots start at its sampled world position. |
+| `FollowOrigin` | false snapshots origin at call time; true samples the live source before each volley. Removed followed origins cancel pending firing. |
+| `SpawnInformation` | Shared SimulatedSpawnInfo, including optional Group. |
+| `Pattern` | Type Fan, Count 1, SpreadAngle 0, PhaseAngle 0, optional signed 32-bit Seed. |
+| `Volleys`, `VolleyInterval`, `Delay` | 1, 0, 0. Multiple volleys require a positive finite interval. |
+| `ShotOverrides` | Indexed spawn override tables, reused by shot index across volleys. |
+| `PrepareShot` | Synchronous `(ShotInformation, Context) -> overrides, false, or nil`; false skips, nil keeps it. Errors/yields stop pending firing. |
+
+Count is 1-256 per volley; requested total is at most 4,096. SpreadAngle is the **total** spread, not the gap between shots. Fan evenly centers yaw directions on local forward, including even counts. Ring spans the local XZ plane without a duplicate closing sample. Cone samples uniform solid angle with full opening angle 0-180 degrees. Sphere uses Fibonacci directions with seeded orientation. PhaseAngle rotates around local up; seed plus volley index makes repeatable variation.
+
+Settings apply shared info, generated position/direction, indexed override, then hook override. Generated direction removes shared Velocity; explicit per-shot Velocity remains supported. Context contains `Index` (global requested emission index), `VolleyIndex`, `ShotIndex`, sampled `Origin`, and generated `Direction`. Caller settings are copied. IDs/network IDs are prohibited in burst settings, and an assigned burst cannot switch Group through shot overrides/hooks.
+
+Zero-delay first volleys run synchronously. Later volleys share a lazy scheduler: at most four whole volleys per Heartbeat, one per burst, under a 1ms soft inter-volley budget. A whole volley can exceed that budget. After a delay, the next interval starts from actual emission time rather than firing several overdue volleys together.
+
+| BurstHandle method | Result |
+| --- | --- |
+| `Cancel(Reason?)` | Idempotent pending-only cancellation; emitted projectiles continue. |
+| `IsActive()` | Whether firing work remains. |
+| `GetStatus()` | Copy: State, Emitted, Skipped, Requested, VolleysCompleted, Reason, Error. State is Scheduled/Firing/Completed/Cancelled/Failed. |
+| `GetIdentifiers()` | Copied successful shot IDs in emission order, including IDs whose shots may already have ended. |
+
+### Centered Triple Spread
+
+Assumes ProjectileCore, Character and a live `Muzzle : Attachment` are available from trusted server ability code:
 
 ```lua
-ProjectileCore.SetHoming(Identifier, {
-	["Enabled"]              = true;
-	["Target"]               = TargetPart;
-	["TargetPosition"]       = Vector3.new(0, 10, -100);
-	["Offset"]               = Vector3.new(0, 1.5, 0);
-	["TurnSpeed"]            = 8;
-	["MinimumDistance"]      = 2;
-	["AutoAcquire"]          = true;
-	["AutoAcquireRange"]     = 220;
-	["AutoAcquireInterval"]  = 0.08;
-	["AutoAcquireRetarget"]  = true;
-	["RequireLineOfSight"]   = false;
+local Burst = ProjectileCore["SpawnBurst"]("Rocket", {
+	["Origin"] = Muzzle;
 
-	["AutoAcquireValidator"] = function(TargetHumanoid : Humanoid, TargetCharacter : Model) : boolean
-		return TargetHumanoid["Health"] > 0 and TargetCharacter ~= OwnerCharacter;
-	end;
-}, true);
+	["Pattern"] = {
+		["Type"]        = "Fan";
+		["Count"]       = 3;
+		["SpreadAngle"] = 24;
+	};
+
+	["SpawnInformation"] = {
+		["Speed"]                = 180;
+		["Creator"]              = Character;
+		["Authority"]            = "Server";
+		["CreateProjectilePart"] = false;
+		["IgnoreList"]           = { Character; };
+	};
+});
 ```
 
-| Setting | Description |
-| --- | --- |
-| `Enabled` | False disables homing without clearing all data. |
-| `Target` | Instance target, usually BasePart, Model, or Attachment. |
-| `TargetPosition` | Static world target position. |
-| `Offset` | Offset added to resolved target position. |
-| `TurnSpeed` | Steering strength. Higher values turn harder. |
-| `MinimumDistance` | Distance where steering stops. |
-| `AutoAcquire` | Searches humanoids for a target. |
-| `AutoAcquireRange` | Max acquisition range. |
-| `AutoAcquireInterval` | Retarget check interval. Keep this sane. |
-| `AutoAcquireRetarget` | Allows target replacement over time. |
-| `RequireLineOfSight` | Requires clear ray to target. Extra ray cost. |
-| `AutoAcquireValidator` | Team checks, forcefields, boss immunity, no-projectile-targeting, etc. |
+This gives -12, 0, and +12 degrees. Manual SpawnSimulated loops remain supported for custom layouts.
 
-## TravelData For Bezier
+## Projectile Groups
+
+`CreateProjectileGroup({ Name?, OnFinished? }?)` returns a runtime-local handle for managing an attack. It accepts simulated and registered physical entries, with one group per projectile. Actual ownership changes detach members synchronously, so later group commands cannot control a transferred projectile. Same-owner assignments retain membership.
+
+| Method | Contract |
+| --- | --- |
+| `Add(Identifier)`, `Remove(Identifier)` | boolean, optional rejection reason. Add requires active eligible entry/open group; duplicate same-group Add is harmless. Remove detaches, not cancels. |
+| `Contains(Identifier)`, `GetCount()` | Current identity-checked membership, not a spawn history. |
+| `GetIdentifiers()` | Copied active member IDs; ordering unspecified. |
+| `Seal()` | Reject manual additions/new burst assignments. Existing burst reservations may finish emitting. |
+| `Cancel(Reason?)`, `Destroy(Reason?)` | Close admissions, cancel assigned pending bursts, cancel members. Destroy aliases Cancel, not detach-all. |
+| `IsActive()`, `GetStatus()` | Open/Sealed remain active. Status copy contains Name, State, MemberCount, PendingBursts, Reason. |
+| `SetTimeScale(Scale, ShouldBroadcast?)`, `SetControlImmunity(Patch, ShouldBroadcast?)` | Bulk calls across both projectile types. Group scale validation requires finite nonnegative values. |
+| `SetHoming(Data?, ShouldBroadcast?)`, `Redirect(Velocity, ShouldBroadcast?)`, `Patch(Data, ShouldBroadcast?)`, `Transition(Information)` | Simulated-only bulk operations; physical members are skipped. Redirect preserves each member's position/acceleration/filters. |
+
+Bulk results contain `Attempted`, `Skipped`, `Failed`, `FirstError`; attempted calls are not guaranteed state changes. Arguments are validated first. Commands snapshot membership and recheck activity/identity; additions during a command are excluded and individual failures do not abort unrelated members.
+
+Completion means **Sealed + no members + no pending bursts**. Empty Open groups remain usable. `OnFinished(Status)` is protected and runs once for logical terminal state, independently of retained fades/yielded notifications. Groups create no per-member polling loop, are not replicated identities, and cannot enroll server-authoritative client mirrors for local control. Death/unequip cancellation remains ability-owned.
+
+### Grouped Ring And Cleanup
+
+Assumes ProjectileCore, Character, and Muzzle from the previous example:
 
 ```lua
-["TravelMode"] = "CubicBezier";
-["TravelData"] = {
-	["Target"]                = TargetPart;
-	["TargetOffset"]          = Vector3.new(0, 1.5, 0);
-	["TrackTarget"]           = true;
-	["ControlPointA"]         = StartPosition + Vector3.new(-20, 35, 0);
-	["ControlPointB"]         = StartPosition + Vector3.new(30, 20, -80);
-	["Duration"]              = 1.15;
-	["Speed"]                 = 220;
-	["CompletionMode"]        = "Homing";
-	["ContinueDuration"]      = 0.65;
-	["HomingTurnSpeed"]       = 8;
-	["HomingMinimumDistance"] = 2;
-	["DestroyOnComplete"]     = false;
-};
-```
+local Group = ProjectileCore["CreateProjectileGroup"]({ ["Name"] = "BladeRing"; });
 
-| Setting | Description |
-| --- | --- |
-| `End` / `Target` / `EndPosition` | End source. Can be position, CFrame, BasePart, Model, or Attachment. |
-| `TargetOffset` | Offset added to target. |
-| `TrackTarget` | Updates end position as an Instance target moves. |
-| `ControlPoint` | Quadratic control point. |
-| `ControlPointA` / `ControlPointB` | Cubic control points. |
-| `Duration` | Seconds to traverse the curve. |
-| `Speed` | Used to derive duration/tangent velocity when duration is absent. |
-| `CompletionMode` | `Linear`, `Destroy`, `Homing`, or `ContinueBezier`. |
-| `ContinueDuration` | Segment duration when continuing Bezier toward a moving target. |
-| `HomingTurnSpeed` | Turn speed when completion mode becomes homing. |
-| `HomingMinimumDistance` | Minimum distance for post-curve homing. |
-| `DestroyOnComplete` | Shortcut for `CompletionMode = "Destroy"`. |
+ProjectileCore["SpawnBurst"]("Blade", {
+	["Origin"]         = Muzzle;
+	["FollowOrigin"]   = true;
+	["Volleys"]        = 3;
+	["VolleyInterval"] = 0.2;
 
-`CompletionMode = "Homing"` is the clean way to curve first, then track directly afterward.
+	["Pattern"] = {
+		["Type"]  = "Ring";
+		["Count"] = 12;
+	};
 
-## ControlImmunity
-
-`ControlImmunity` blocks ProjectileCore CC/control systems without disabling normal hit detection, damage callbacks, cleanup, or collision behavior.
-
-```lua
-ProjectileCore.RegisterProjectile("BossMeteor", {
-	["ControlImmunity"] = {
-		["Deflect"]  = true;
-		["Attract"]  = true;
-		["AreaTime"] = true;
+	["SpawnInformation"] = {
+		["Group"]                = Group;
+		["Speed"]                = 120;
+		["Creator"]              = Character;
+		["Authority"]            = "Server";
+		["CreateProjectilePart"] = false;
 	};
 });
 
-local Identifier = ProjectileCore.SpawnSimulated("BossMeteor", {
-	["Position"] = StartPosition;
-	["Velocity"] = Direction.Unit * 280;
-	["Creator"]  = BossCharacter;
+Group:Seal();
+
+--// In the ability's death/unequip cleanup, if it should cancel this attack:
+
+local function StopAttack() : ()
+	Group:Destroy("AbilityEnded");
+end;
+```
+
+Seal allows the assigned burst to finish. Destroy stops pending emissions and cancels current members. Call StopAttack from the ability's existing death or unequip cleanup.
+
+## Movement, Ownership, And Patching
+
+These functions operate on an active ID. Call server gameplay mutations on the server and local cosmetic mutations locally; editing a server-authoritative mirror is not an authoritative command.
+
+| Function | Parameters, result, and limits |
+| --- | --- |
+| `Redirect` | Required new Velocity; optional Position, Acceleration, IgnoreList preserve current tracked values. Simulated-only, no success result. Recasts/reconciles motion and interrupts a pending authored phase notification. Very-near unchanged position/velocity can take an update-only shortcut. |
+| `SetHoming` | HomingData or nil to clear; simulated-only. Does **not** replace Bezier travel. Use TransitionProjectile for an explicit Bezier-to-homing change. Interrupts the authored phase notification. |
+| `SetTimeScale` | Finite scale; simulated values below 0 are ignored, 0 pauses, 1 is normal. Physical values go through the physical adapter, not the simulated validation path. |
+| `SetOwner` | New owner Instance, or nil to clear. Uses owner resolution; actual changes detach groups and interrupt phases. No automatic reattachment when ownership later returns. |
+| `GetOwner` | Current resolved owner Instance or nil. |
+| `SetControlImmunity` | Boolean immunity patch; supports both projectile types and refreshes captures. false removes that key's protection. |
+| `PatchProjectile` | Supported simulated fields only, validated before application. It does not replace identity, ownership, template, cache, callbacks, lifetime limits, or group membership. |
+| `Cancel`, `DestroyProjectile` | Both types; optional reason defaults Cancelled. Idempotent for an absent/ended entry. Normal terminal notifications/visual release still run. |
+
+Where exposed, `ShouldBroadcast` defaults to replication unless explicitly false. It applies to replicated simulated state; physical state continues through the physical adapters. Use the owner and control APIs rather than editing entry internals.
+
+Supported patch keys are `Velocity`, `Acceleration`, `HomingData`, `IgnoreList`, `IgnoreWater`, `SpherecastRadius`, `HumanoidSpherecastRadius`, `BlockcastSize`, `UseShapecast`, `Bounce`, `ProjectileCollision`, `CollisionEnabled`, `CollisionMode`, `SimulationStepMode`, `AllowEmptySpaceSkip`, `TimeScale`, `AngularSpin`, `SpinStrength`, `SpinDirection`, the three SnapHit fields, `EffectPolicy`, `EffectsEnabled`, `ReplicationPolicy`, `ReplicationSyncInterval`, `ReplicationSmoothTime`, `ReplicationSnapDistance`, `UserData`, `ReplicatedUserData`, `ReplicateUserData`, `ReplicateHitInfo`, `ControlImmunity`, `Curves`, and `AllowVisualBudget`.
+
+Lua tables do not carry a nil-valued key. Assigning nil in a patch is not a universal clear operation; use dedicated clearing APIs where offered. Sphere-to-block switches can disable SpherecastRadius with 0 in the same validated patch. Do not assume a nullable BlockcastSize or template can be cleared by an omitted field. Use a new configured shot when no supported clear path exists.
+
+## Safe Phase Transitions
+
+`TransitionProjectile(Identifier, Information) -> boolean, reason?` is the explicit atomic movement switch. `GetProjectilePhase(Identifier)` returns a copied status or nil. Both are simulated-only; transitions reject missing/terminal entries, pending casts, server mirrors on clients, unsafe decision hooks, and stale expected revisions before committing.
+
+| Information field | Contract |
+| --- | --- |
+| `Mode` | Required Linear, Homing, QuadraticBezier, or CubicBezier. |
+| `Name` | Optional diagnostic phase name. |
+| `Velocity` | Omit to preserve effective current momentum; explicit value replaces it. |
+| `Acceleration` | Omit to preserve base acceleration rather than superseded field contributions. |
+| `HomingData` | Required valid homing settings for Homing; incompatible with other modes. |
+| `TravelData` | Required valid travel target/settings for Bezier; curve starts at current tracked position. Incompatible with Linear/Homing. |
+| `CollisionEnabled` | Optional new world/clash collision state. |
+| `ReleaseControllers` | Array of live Motion/Force controller handles to release. |
+| `Duration`, `OnPhaseComplete` | Optional finite **positive** effective-time timer, with protected `(Identifier, Status)` notification. Callback requires Duration. |
+| `ExpectedRevision` | Optional optimistic check against current phase Revision. |
+
+Preserves position, public/network identity, owner, group membership, total age/distance limits, visuals, effects, and angular spin. Does not rerun preparation, close-hit snap, spawn, or destroy notifications. Superseded homing/travel is reconciled and stale worker/collision results invalidated; Wind momentum is merged once rather than duplicated.
+
+Released controllers cannot recapture the entry until those controllers end. Unlisted controls, one-shot attraction, immunity, and FrozenMoment remain in effect. Release preserves the new phase velocity instead of restoring an older capture velocity.
+
+Status: `Name`, `Revision`, `Mode`, `Elapsed`, `Duration`, `TimerCompleted`, `Interrupted`. Duration expiry reports completion **once** but does not stop movement or auto-transition. Slowdown affects the clock; frozen effective time pauses it. Replacement, actual ownership change, deflection, and base-motion-changing APIs invalidate the pending notification. External field influence alone does not.
+
+### Orbit To Launch
+
+Assume `Identifier` was spawned with CollisionEnabled false, `OrbitController` is its live controller, and `LaunchVelocity` comes from trusted ability code:
+
+```lua
+local Applied, Reason = ProjectileCore["TransitionProjectile"](Identifier, {
+	["Name"]               = "Launched";
+	["Mode"]               = "Linear";
+	["Velocity"]           = LaunchVelocity;
+	["Acceleration"]       = Vector3.zero;
+	["CollisionEnabled"]   = true;
+	["ReleaseControllers"] = { OrbitController; };
+});
+
+if not Applied then
+	warn("Launch rejected: " .. tostring(Reason));
+end;
+```
+
+Call from the ability's existing release/input/timing logic. Keep ownership of the controller and destroy it during ability cleanup. A phase is not an automatic sequencer; Group:Transition applies the same request independently to each current simulated member.
+
+## Homing And Bezier Travel
+
+HomingData supports `Enabled`, Instance `Target` (legacy `HomingInstance`), `TargetTag`, Vector3 `TargetPosition`, local/world target `Offset`, `TurnSpeed`, `MinimumDistance`, `AutoAcquire`, `AutoAcquireRange`, `AutoAcquireInterval`, `AutoAcquireRetarget`, `RequireLineOfSight`, `AutoAcquireValidator`, and `DebugVisualizerInterval`.
+
+Direct homing defaults to TurnSpeed 10 and MinimumDistance 0. Auto acquisition is opt-in, samples at 0.1 seconds by default, and needs a range; the omitted range resolves to 0. Use the synchronous `AutoAcquireValidator(Humanoid, Character) -> boolean` for additional target rules such as factions and ForceFields. Acquisition scheduling spreads refresh work, but each validator still runs on the main thread.
+
+Bezier TravelData accepts `Target`/`End` (Vector3, CFrame, BasePart, Model, Attachment), `EndPosition`, `TargetOffset`, `TrackTarget`, `ControlPoint` (quadratic), `ControlPointA`/`ControlPointB` (cubic), `Duration`, `Speed`, `OrientationMode`, `CompletionMode`, `HomingTurnSpeed`, `HomingMinimumDistance`, `ContinueDuration`, and `DestroyOnComplete`. Author Duration when timing matters rather than relying on derived distance/speed timing.
+
+CompletionMode is Linear, Destroy, Homing, or ContinueBezier. A travel-complete destruction is not necessarily a world Hit. Tracking a moving target changes the evaluated endpoint; deflection and explicit phase changes clear superseded travel/homing state consistently. SetHoming alone does not erase a still-active Bezier.
+
+For per-shot homing patterns, use a non-yielding PrepareShot override and normal HomingData. Origin/direction are already generated; return only the intended override:
+
+```lua
+local function PrepareHomingShot(Information : ProjectileCore.SimulatedSpawnInfo, Context : ProjectileCore.BurstShotContext) : ProjectileCore.SimulatedSpawnInfo?
+	if not TargetPart:IsDescendantOf(workspace) then return nil; end;
+
+	return {
+		["HomingData"] = {
+			["Enabled"]         = true;
+			["Target"]          = TargetPart;
+			["TurnSpeed"]       = 10;
+			["MinimumDistance"] = 2;
+		};
+	};
+end;
+```
+
+Here TargetPart is an ability-selected BasePart and the function is assigned to BurstInformation.PrepareShot. Nil keeps the normal generated shot; return false instead if your ability should skip a missing target.
+
+## Deflection And Shields
+
+### Direct And Area Deflection
+
+`Deflect(Identifier, Parameters, ShouldBroadcast?)` accepts simulated/registered physical IDs and returns no success value at the root API. Parameters include explicit `Velocity`, `Normal`, `Direction`, `Position`, `Acceleration`, replacement `IgnoreList`, `Deflector`, `ChangeOwner`, `ReflectionMode`, `CenterPosition`, `OwnerSearchRange`, `SpeedMultiplier`, `MaxDeflectSpeed`, `SpreadAngle`, `ReflectionBias`, `DeflectCooldown`, `LocateTargetValidator`, and `IsTeammate`.
+
+ReflectionMode supports Reflect, Return, Locate, Lob. Direct simulated defaults are Reflect, search range 500, speed multiplier 1.15, spread 0, reflection bias 0.5. The physical direct wrapper defaults to Return; set the mode explicitly for cross-type consistency. Physical options also include RespectDeflectable, RequireTouch, IgnoreSet, Blacklist. Deflection respects immunity, count limits, and cooldowns; root returning nil does not mean a redirect succeeded.
+
+`DeflectArea(Parameters) -> { BasePart }` adds area geometry, IgnoreList, Deflector/Character/Owner/Tool references, AreaGroup/Priority/LockDuration, optional LeadTime/UseIncomingFilter, ShouldBroadcast, debug options, and `DeflectFunction(Part?, Entry?, Position)`. That callback runs after each successful deflection; a server-invisible simulated entry can have nil Part. The returned array contains existing parts only, so it is **not** a count of every successful partless deflection. The physical area path can consider eligible physical parts under its existing deflectability rules.
+
+`AreaGroup` controls priority locks between overlapping area operations. It is separate from CreateProjectileGroup membership.
+
+### Configurable Surfaces
+
+`SetDeflectionPartConfig(PartOrModel, Config)` and `ClearDeflectionPartConfig(PartOrModel)` are **server-only**. Setting replaces the config, getting returns a copy or nil. Reliable updates/recovery distribute serializable surface settings; authoritative deflection outcomes still use the ordinary lifecycle path.
+
+| Config field | Default / behavior |
+| --- | --- |
+| `Enabled` | true. Explicit false suppresses surface deflection; clearing restores normal CanDeflect attribute behavior. |
+| `Mode` | Reflect: collision normal; Direction: supplied world vector; Facing: current surface orientation transforms LocalDirection; Return: aim at current incoming owner, else reflect. |
+| `Direction` | Required finite nonzero vector for Direction mode. |
+| `LocalDirection` | `(0, 0, -1)`; used by Facing/front-face logic. |
+| `SpeedMultiplier`, `MaximumSpeed` | 1, optional speed cap. |
+| `TwoSided` | true. false accepts front-side incoming motion only; rejected back contacts continue normal hit/pierce handling. |
+| `Owner` | Optional explicit ownership transfer. Configured surfaces otherwise preserve ownership. |
+
+Configured surfaces need no separate CanDeflect attribute. Direct part configuration takes precedence over ancestor Model configuration. Simulated contacts and registered physical autocast share resolution; no automatic Touched listener/polling loop is installed per shield. Existing unconfigured CanDeflect surfaces retain their legacy behavior. Shield deflection precedes piercing/bouncing and does not bypass immunity or deflection limits.
+
+Assume ShieldPart/RedirectPart are server-owned BaseParts:
+
+```lua
+ProjectileCore["SetDeflectionPartConfig"](ShieldPart, {
+	["Mode"]            = "Reflect";
+	["TwoSided"]        = false;
+	["SpeedMultiplier"] = 1;
+});
+
+--//
+
+ProjectileCore["SetDeflectionPartConfig"](RedirectPart, {
+	["Mode"]           = "Direction";
+	["Direction"]      = Vector3.new(0, 1, -1)["Unit"];
+	["MaximumSpeed"]   = 500;
+});
+```
+
+## Area Controllers
+
+`CreateAreaController(Information) -> AreaControllerHandle` creates a persistent field, normally on the server. Clients run broadcast predictive shadows for simulated visuals; they do not replace authoritative gameplay. Defaults affect simulated and physical projectiles, priority 0, broadcast enabled. Lifetime omitted/zero persists until destroyed. Fields do not automatically belong to a projectile Group.
+
+| Information | Contract |
+| --- | --- |
+| `Mode` | Orbit, Tornado, Attract, Wind, FrozenMoment. Orbit is the default; BehaviorMode is a legacy alias. |
+| `Center`, `CenterPosition` | Vector3/CFrame or live BasePart/Model/Attachment center; moving sources are sampled. |
+| `Area` | Capture geometry; independent from motion distribution Shape. |
+| `Behavior` | Lifetime, ReleaseMode, FacePath, FacePathTime, slowdown entry/exit fields. |
+| `Motion` | Orbit/tornado distribution, Attract parameters, or Wind direction/speed/response settings. |
+| `Shape` | Orbit/tornado motion distribution: Sphere, Box, Cylinder, Disc with ShapePartial, ShapeStyle, ShapeInOut. |
+| `AreaPriority`, `AreaGroup` | Lane priority and diagnostic/grouping context. |
+| `AffectSimulated`, `AffectPhysical`, `ShouldBroadcast` | true unless explicitly false. Physical capture is server-side. |
+| Debug options | Explicit opt-in area visualization, color/lifetime/transparency/AlwaysOnTop. |
+
+Area supports Sphere, Box, Cylinder, Disc, Cone, Pyramid, Capsule, and HalfSphere. Geometry fields include Shape/AreaShape, Center, CFrame/AreaCFrame, Range/Radius, Size, Height, Thickness, and Direction/Normal/Axis. Disc uses a thin cylinder with finite thickness.
+
+| Lane | Modes / overlap behavior |
+| --- | --- |
+| Motion | Orbit, Tornado, persistent Attract compete by priority. |
+| Force | Wind competes with other Wind fields; Motion control or active one-shot attraction suspends its contribution. |
+| Time | FrozenMoment independently controls effective time. |
+
+Higher AreaPriority wins within a lane; ties retain the existing controller. Discovery uses the spatial index at 10Hz and captured control stepping at 30Hz. Runtime immunity changes can release captures. Broadcast deterministic controls normally use 0.25s periodic corrections; server-only controls needing visual correction retain 0.08s, with reliable capture/release corrections. These intervals are not packet-latency guarantees.
+
+Handle methods: `Destroy(Reason?)`, `Pause()`, `Resume()`, `SetCenter(Center)`, `SetPriority(Priority)`, `GetCaptured()`, `IsActive()`. GetCaptured returns a current array of entries; Destroy releases/stops the field. Pause suspends controller activity, not projectile lifetime or every unrelated influence. Own field cleanup in your ability lifecycle.
+
+### Orbit, Tornado, And Attract
+
+Behavior defaults: `ReleaseMode = "PreserveVelocity"`, `FacePath = true`, `FacePathTime = 0.08`. RestoreOriginal requests original velocity for ordinary Motion releases; active speed-curve reconciliation favors current momentum instead of restoring stale curve-era velocity. FrozenMoment restores captured time scale independently.
+
+Motion supports Axis, Radius (20), Height (24), Cycles (1), HoverHeight (0), SpinSpeed, CorrectionSpeed (12). SpinSpeed is **radians/second**, unlike AngularSpin's degrees/second. Without SpinSpeed, finite lifetime derives speed from Cycles; otherwise it defaults to one revolution/second. Zero Axis enables smooth per-projectile axis drift. Motion values accept numbers or `{ Min | Minimum, Max | Maximum }` tables, rolled per capture; Lifetime rolls once per controller.
+
+Orbit/tornado Shape supports `ShapePartial` (default 1), Surface/Volume ShapeStyle, and Outward/Inward/InAndOut ShapeInOut. Orbit remains mainly circular/radial; Tornado adds vertical swirl. Area controls **which entries are captured**; Shape controls **how they are distributed**.
+
+Persistent Attract uses Motion.Strength (20), Falloff (1.4), and Method VelocityDamp or AccelerationDamp. Prefer one lifetime-controlled field for a sustained vortex.
+
+`AttractArea(Information) -> { ProjectileEntry }` is the one-shot API. It accepts the same center/area shapes plus Strength, Falloff, Duration, Method, OneShot, IgnoreList, affected-type flags, priority/group, and broadcast options. It selects entries present at the time of the call. Use a persistent Attract controller when new projectiles should enter the field over its lifetime.
+
+### Wind
+
+Motion defaults: `Direction = Vector3.new(0, 0, -1)`, `DirectionSpace = "Local"`, `Speed = 30`, `ResponseTime = 0.35`. Direction must be finite/nonzero, Speed nonnegative, ResponseTime positive. World uses a world vector; Local follows the center orientation, with position-only centers using world axes.
+
+Wind is a bounded additive velocity approaching the requested current, **not another full velocity added every frame**. Ordinary homing/gravity continue; Bezier uses separate displaced path state. Release preserves displacement and reconciles momentum once. FrozenMoment pauses accumulation without saving an impulse to launch later. Physical adapters apply velocity differences without teleporting or duplicating forces.
+
+Example: a server wind field with a separately immune meteor definition:
+
+```lua
+ProjectileCore["RegisterProjectile"]("MiniMeteor", {
+	["CreateProjectilePart"] = false;
+	["SpherecastRadius"]     = 5;
 
 	["ControlImmunity"] = {
-		["Deflect"] = false;
+		["Wind"] = true;
 	};
 });
 
-ProjectileCore.SetControlImmunity(Identifier, {
-	["All"] = true;
-}, true);
-```
+--//
 
-| Key | Blocks |
-| --- | --- |
-| `All` | All ProjectileCore control systems. |
-| `Deflect` | Direct/raycast deflect and fallback for DeflectArea. |
-| `DeflectArea` | Area deflect only, falling back to `Deflect`. |
-| `Attract` | AttractArea control. |
-| `AreaController` | All persistent area-controller modes. |
-| `AreaMotion` | Orbit and Tornado lanes. |
-| `AreaTime` | FrozenMoment lane. |
-| `Orbit` | Orbit mode only. |
-| `Tornado` | Tornado mode only. |
-| `FrozenMoment` | FrozenMoment mode only. |
-
-Definition and spawn immunity tables merge. Spawn values take priority; `false` explicitly removes/overrides a default immunity. Runtime updates can release a projectile from a controller if the new immunity blocks the current lane.
-
-## Deflect
-
-```lua
-ProjectileCore.Deflect(Identifier, {
-	["Deflector"]       = Character;
-	["CenterPosition"]  = ProjectileEntry["Simulated"]["Position"];
-	["ReflectionMode"]  = "Return";
-	["SpeedMultiplier"] = 1.15;
-	["MaxDeflectSpeed"] = 600;
-	["SpreadAngle"]     = 4;
-	["ReflectionBias"]  = 0.5;
-	["ChangeOwner"]     = true;
-}, true);
-```
-
-| ReflectionMode | Behavior |
-| --- | --- |
-| `Reflect` | Mirrors incoming velocity using a surface normal or supplied `Normal`. |
-| `Return` | Sends the projectile back toward owner/source/deflector context. |
-| `Locate` | Searches for a valid nearby target and redirects toward it. |
-| `Lob` | Produces an arcing redirected shot. |
-| Direct `Velocity` | Uses supplied velocity directly. |
-| Direct `Direction` | Builds velocity from direction and speed settings. |
-
-`ControlImmunity.Deflect` rejects direct and raycast deflection. `ControlImmunity.DeflectArea` rejects only area deflect, unless `Deflect` or `All` also applies.
-
-> [BlajahBean] reflect = bounce. return = no u. locate = find unlucky guy. lob = yeet.
-
-## DeflectArea
-
-```lua
-ProjectileCore.DeflectArea({
-	["Center"]           = RootPart;
-	["Range"]            = 22;
-	["Shape"]            = "Sphere";
-	["Deflector"]        = Character;
-	["ReflectionMode"]   = "Return";
-	["SpeedMultiplier"]  = 1.12;
-	["DeflectCooldown"]  = 0.12;
-	["AreaGroup"]        = "ParryWindow";
-	["AreaPriority"]     = 1;
-	["AreaLockDuration"] = 0.16;
-	["ShouldBroadcast"]  = true;
-});
-```
-
-Supported area shapes include `Sphere`, `Box`, `Cylinder`, `Disc`, `Cone`, `Pyramid`, `Capsule`, and `HalfSphere`. FAR WARNING tho, `Disc` is treated as a thin cylinder, not an infinitely thin math plane that makes physics cry.
-
-| Setting | Description |
-| --- | --- |
-| `Center` / `CenterPosition` | Position source. |
-| `Range` / `Radius` | Radius for spherical/cylindrical shapes. |
-| `Shape` / `AreaShape` | AreaQuery capture shape. |
-| `CFrame` / `AreaCFrame` | Oriented area frame. |
-| `Size` | Box/block-style size. |
-| `Height` / `Thickness` | Cylinder/disc/capsule height. |
-| `AreaGroup` | Logical group name for replacement rules. |
-| `AreaPriority` | Higher priority beats lower priority. |
-| `AreaLockDuration` | Prevents rapid replacement. |
-| `DeflectCooldown` | Per-projectile deflect cooldown. |
-
-## AttractArea
-
-```lua
-ProjectileCore.AttractArea({
-	["Center"]          = BlackholePart;
-	["Range"]           = 60;
-	["Strength"]        = 120;
-	["Falloff"]         = 1.4;
-	["Duration"]        = 0.95;
-	["Method"]          = "VelocityDamp";
-	["AreaGroup"]       = "Blackhole";
-	["AreaPriority"]    = 2;
-	["AffectSimulated"] = true;
-	["AffectPhysical"]  = false;
-	["ShouldBroadcast"] = true;
-});
-```
-
-| Method | Behavior |
-| --- | --- |
-| `VelocityDamp` | Bends current velocity toward the center. |
-| `AccelerationDamp` | Adds acceleration toward the center over time. |
-
-AttractArea skips entries with `ControlImmunity.Attract` or `ControlImmunity.All`.
-
-## AreaController
-
-`CreateAreaController` creates a persistent controller that scans active projectiles at a bounded rate and steps captured projectiles at controller rate. It uses velocity/time-scale control instead of direct teleporting, because teleport trails look like a bug report with particles.
-
-```lua
-local Controller = ProjectileCore.CreateAreaController({
-	["Mode"]            = "Orbit";
-	["Center"]          = RootPart;
-	["AreaPriority"]    = 5;
-	["AffectSimulated"] = true;
-	["AffectPhysical"]  = true;
-	["ShouldBroadcast"] = true;
+local Wind = ProjectileCore["CreateAreaController"]({
+	["Mode"]   = "Wind";
+	["Center"] = CFrame.lookAt(StartingPosition, StartingPosition + PushDirection);
 
 	["Area"] = {
 		["Shape"] = "Sphere";
-		["Range"] = 32;
+		["Range"] = 30;
 	};
 
 	["Behavior"] = {
-		["Lifetime"]     = 5;
-		["ReleaseMode"]  = "PreserveVelocity";
-		["FacePath"]     = true;
-		["FacePathTime"] = 0.08;
+		["Lifetime"] = 1;
 	};
 
 	["Motion"] = {
-		["Axis"]            = Vector3.new(0, 1, 0);
-		["Radius"]          = { ["Min"] = 8; ["Max"] = 14; };
-		["Height"]          = { ["Min"] = 0; ["Max"] = 12; };
-		["Cycles"]          = 2;
-		["HoverHeight"]     = 2;
-		["SpinSpeed"]       = { ["Min"] = 6; ["Max"] = 10; };
-		["CorrectionSpeed"] = 12;
-	};
-
-	["Shape"] = {
-		["Shape"]        = "Disc";
-		["ShapePartial"] = 1;
-		["ShapeStyle"]   = "Surface";
-		["ShapeInOut"]   = "InAndOut";
+		["DirectionSpace"] = "Local";
+		["Direction"]      = Vector3.new(0, 0, -1);
+		["Speed"]          = 90;
+		["ResponseTime"]   = 0.2;
 	};
 });
 ```
 
-### Handle Methods
-
-| Method | Description |
-| --- | --- |
-| `Destroy(Reason?)` | Releases captured entries and stops the controller. |
-| `Pause()` | Stops scanning/stepping without destroying state. |
-| `Resume()` | Resumes a paused controller. |
-| `SetCenter(Center)` | Updates center source. |
-| `SetPriority(Priority)` | Updates priority for conflict checks. |
-| `GetCaptured()` | Returns captured entries. |
-| `IsActive()` | Returns active state. |
-
-### Modes
-
-| Mode | Lane | Behavior |
-| --- | --- | --- |
-| `Orbit` | Motion | Orbits around a center using tangent velocity and correction. |
-| `Tornado` | Motion | Orbit plus vertical swirl/height shaping. |
-| `FrozenMoment` | Time | Eases projectiles into slow/frozen time and restores prior time scale on exit. |
+StartingPosition and nonzero PushDirection are ability-supplied vectors. The field pushes along one uniform current, not radially away from its center or along a spline.
 
 ### FrozenMoment
 
+Behavior `SlowDownMultiplier` defaults 0.5; 0 means normal speed, 1 means stopped (`TimeScale = 1 - multiplier`). Entry/exit easing default 0.35 seconds. These may also be supplied as top-level slowdown fields. Release restores each entry's pre-field time scale, not blindly 1. Fully stationary frozen projectiles skip useless movement casts but remain clash candidates if otherwise eligible.
+
 ```lua
-local Controller = ProjectileCore.CreateAreaController({
-	["Mode"] = "FrozenMoment";
+local Freeze = ProjectileCore["CreateAreaController"]({
+	["Mode"]   = "FrozenMoment";
 	["Center"] = FreezePart;
 
 	["Area"] = {
 		["Shape"] = "Sphere";
-		["Range"] = 50;
+		["Range"] = 45;
 	};
 
 	["Behavior"] = {
-		["Lifetime"]            = 3;
+		["Lifetime"]            = 2.5;
 		["SlowDownMultiplier"]  = 1;
 		["ProjectileEntryTime"] = 0.35;
 		["ProjectileExitTime"]  = 0.35;
@@ -554,229 +615,325 @@ local Controller = ProjectileCore.CreateAreaController({
 });
 ```
 
-`SlowDownMultiplier = 0` means normal speed. `SlowDownMultiplier = 1` means halted. Internally this maps to `TimeScale = 1 - SlowDownMultiplier`. Fully paused movement skips raycasts for optimization.
+## Control Immunity
 
-### Conflict Rules
+Definition immunity merges with spawn immunity; explicit false overrides that key. `SetControlImmunity(Identifier, Patch, ShouldBroadcast?)` updates existing simulated/physical entries and releases newly blocked captures. These protections affect Core control systems, not world hits, damage, cleanup, or external hitboxes.
 
-AreaController maintains two conflict lanes:
-
-| Lane | Modes |
+| Key | Blocks |
 | --- | --- |
-| `Motion` | `Orbit`, `Tornado` |
-| `Time` | `FrozenMoment` |
+| `All` | Every listed control/clash response. |
+| `Deflect` | Direct and raycast deflection, and area deflection fallback. |
+| `DeflectArea` | Area deflection only, in addition to Deflect protection. |
+| `Attract` | Attraction operations. |
+| `AreaController` | All controller modes. |
+| `AreaMotion` | Orbit, Tornado, Wind family motion control. |
+| `AreaTime` | FrozenMoment. |
+| `Orbit`, `Tornado`, `FrozenMoment`, `Wind` | The named mode. |
+| `ProjectileCollision` | Incoming projectile clash responses; Deflect additionally blocks clash deflection. |
 
-Higher `AreaPriority` wins within a lane. Equal priority keeps the current controller to prevent jitter flicker. `AreaMotion`, `AreaTime`, and mode-specific immunity keys can reject capture or release already captured entries.
-
-## SpawnPhysical
+Setting Deflect false does not override an independently true All or DeflectArea key. Physical Deflectable/RespectDeflectable checks still apply alongside immunity.
 
 ```lua
-local Identifier, Entry = ProjectileCore.SpawnPhysical(ProjectilePart, {
+ProjectileCore["RegisterProjectile"]("BossMeteor", {
+	["CreateProjectilePart"] = false;
+
+	["ControlImmunity"] = {
+		["Deflect"]   = true;
+		["Attract"]   = true;
+		["AreaTime"]  = true;
+	};
+});
+```
+
+## Projectile Clashes
+
+Both entries must explicitly enable `ProjectileCollision` and be server-authoritative simulated gameplay projectiles. Client-only effects, physical projectiles, and arbitrary unregistered objects cannot clash. **CreateProjectilePart false does not disqualify an actual server gameplay entry.** Clash radius is dedicated gameplay geometry, independent from visual scale or world-cast dimensions.
+
+| Setting | Default / behavior |
+| --- | --- |
+| `Enabled` | false |
+| `Power` | 1; finite, nonnegative. Only strictly stronger applies its response. Equal power passes through. |
+| `Radius` | Required positive radius when enabled. |
+| `Response` | Destroy, Trigger, or Deflect; default Destroy. |
+| `ConsumeOnClash` | false; winner continues unless explicitly consumed after success. |
+
+`ConfigureProjectileCollisions({ IsFriendly = Callback? }?)` is server-only; nil clears the custom predicate. Same resolved owner/player and ordinary matching non-neutral player Teams are always excluded. The optional synchronous `(FirstEntry, SecondEntry) -> boolean` adds NPC/custom allegiance rules. Unknown ownership is neutral; errors reject the interaction with bounded diagnostics.
+
+Destroy uses normal cleanup reason `ProjectileClashDestroyed`, not a manufactured world Hit. Trigger requires the **victim's** server `OnClashTrigger(Entry, OtherEntry?, Context)`; invokes once then cleans up as `ProjectileClashTriggered`, including callback failure. Without that hook the response is rejected. Deflect reflects the weaker projectile, preserves its speed, transfers current ownership, and reuses count/immunity/reset behavior. An immune/rejected response does not silently turn into destruction.
+
+`OnProjectileClash` (server) and `OnClientProjectileClash` (visual notification) receive Entry, optional OtherEntry, and committed context with outcome/role, contact position/normal, IDs, and incoming velocities. They cannot rewrite the committed outcome. Existing destroy callbacks still run: abilities that explode for **every** destruction will still do so. Guard reasons explicitly if engulfing should suppress that explosion.
+
+Clashes use a swept serial cohort/spatial candidate lane, relative-motion tests, contact deduplication, and stale-result invalidation. World contacts take precedence on numerical ties. Initial overlap and frozen participants do not imply free computation; dense clumps can still be expensive. Clients receive reliable outcomes, not the entire candidate-pair graph. Physical clashes and mesh-accurate clash shapes are outside this version.
+
+## Impact Context And Attachments
+
+`GetImpactContext(Entry)` reads the immutable snapshot retained on a callback entry, including after registry removal. It accepts an **entry**, not an ID. There is no global impact-history cache.
+
+Context contains `ProjectileIdentifier`, surface `Position`, optional tracked `ProjectilePosition`, `Normal`, `Material`, `Instance`, `IncomingVelocity`, `IncomingDirection`, `LocalPosition`, `LocalNormal`, `LocalDirection`, and `Authoritative`. Instance references can be missing/destroyed/streamed out. Snapshots contain no arbitrary UserData or reference to the recycled projectile visual.
+
+Surface Position is not automatically the projectile center for a sphere/block/shape contact. Local values are captured against ordinary hit parts. Context is captured for committed terminal simulated contacts and accepted physical autocast hits, not speculative probes, pierced contacts, successful deflections, or bounces.
+
+`GetImpactCFrame(Context, Placement?) -> CFrame` resolves a pose without creating anything. Placement: `Alignment = "Incoming"` (default) or `"Normal"`, local `Offset = CFrame.identity`, and `FollowTarget = true`. With a live target/local data it resolves against the target's current pose; otherwise it uses captured world data. Missing direction/normal degrades to available context and safe forward, not invented contact metadata.
+
+`AttachImpact(Context, Template, Options?) -> ImpactHandle?, reason?` is **client-only**. It clones a separate BasePart, Model, or Attachment. Options add finite nonnegative `HoldTime = 1.5`, `FadeTime = 0.35` to placement fields. Returns nil/reason on rejection. The handle has idempotent `Destroy()`, `IsActive()`, and `GetObject()` (nil after disposal).
+
+Decorative parts are anchored/noncolliding/nontouching/nonqueryable. Following uses captured local space and moves all Model parts with shared batched updates; it does **not** weld to the target or alter a gameplay assembly. Attachment templates can use native local parenting; missing targets/Terrain use world placement/carriers. Followed effects end when the target leaves Workspace; no replacement search/wait occurs. Effects are positioned and stale trails cleared before restoration; fading disables continuing emission and fades geometry/decals. No automatic project-specific bursts, damage, or VFX calls occur.
+
+### Embedded Blade
+
+Assumes a separate client `EmbeddedBladeTemplate` and authoritative Context from the hit callback:
+
+```lua
+local function EmbedBlade(Context : ProjectileCore.ProjectileImpactContext) : ()
+	local Handle, Reason = ProjectileCore["AttachImpact"](Context, EmbeddedBladeTemplate, {
+		["Alignment"]    = "Incoming";
+		["Offset"]       = CFrame.new(0, 0, -0.35);
+		["FollowTarget"] = true;
+		["HoldTime"]     = 1.5;
+		["FadeTime"]     = 0.35;
+	});
+
+	if not Handle then
+		warn("Embedded blade rejected: " .. tostring(Reason));
+	end;
+end;
+```
+
+Set Offset for the template's pivot and forward axis; the helper does not infer a blade tip from mesh bounds or inherit projectile spin. For a moving-target particle effect, pass an Attachment template, get the clone with `Handle:GetObject()`, and emit from its known child ParticleEmitter. The handle owns that clone through cleanup. To migrate an existing embedded-blade effect, request hit metadata and use a separate template rather than the active projectile Part.
+
+ReplicateHitInfo enables context metadata through existing reliable Destroy/InstantHit delivery; there is no additional per-frame impact remote. Physical contexts use your ability's own VFX delivery when clients need them.
+
+## Distance And Age Curves
+
+Simulated-only `Curves` can be authored on definitions/spawns and replaced through patches or `SetProjectileCurves(Identifier, Curves?, ShouldBroadcast?)`. Nil in the setter clears the configuration; an empty Curves patch clears it too. Replacement preserves progress and reconciles momentum. `ResetProjectileCurves(Identifier, ShouldBroadcast?)` restarts **curve progress only**; it returns false/NoCurves if none exist. Both setters return boolean/reason and reject unsafe decision hooks or client-mirror gameplay mutation.
+
+`GetCurveValue(IdentifierOrEntry, Name)` reads a built-in channel or named numeric value, or nil when absent. `GetProjectileCurveState(IdentifierOrEntry)` returns copied Revision, effective Age, committed Distance, and Values. Entry-based reads remain usable in terminal callbacks. Values do not automatically apply damage or mutate UserData.
+
+| Curves field | Output |
+| --- | --- |
+| `Speed` | Base-motion multiplier, finite nonnegative; 0 holds base movement. |
+| `VisualScale` | Positive visual multiplier relative to prepared baseline. |
+| `CollisionScale` | Positive world/humanoid sweep multiplier, independent from visual size. Rays remain rays; clash radius is unchanged. |
+| `Values` | Up to 16 named finite numeric channels, such as Damage or BlastRadius. |
+| `ScaleParticles` | false by default; opt in to saved-baseline Size/Speed/Acceleration scaling. |
+
+Each curve has `Input = "Age"` or `"Distance"`, and 1-32 `Keyframes`. Each keyframe has finite nonnegative strictly increasing `At`, finite `Value`, and optional native EasingStyle/EasingDirection controlling the segment **ending at that point**. Defaults are Linear/Out. Values hold outside endpoints; there are no loops or random envelopes. Named channels are 1-64 bytes and cannot collide with built-in/reserved names.
+
+Age uses effective projectile seconds. Distance accumulates committed path travel through turns, bounces and orbiting, excluding sync corrections/teleports. Contact progress is committed before terminal damage reads, not based on an untravelled remainder. Recasts, deflection, ownership and phases preserve progress; only explicit reset restarts it.
+
+Speed modifies base motion without multiplying the previous result repeatedly. Gravity/homing remain integrated, Wind is a separate contribution, and exclusive Orbit/Tornado/Attract control wins while captured. On release current momentum is reconciled. Bezier speed changes progression, not only a reported velocity. Zero Speed still allows Age progression; FrozenMoment pauses effective movement/curve time. Redirect/deflection/clear reconcile the current multiplier once rather than stacking it.
+
+Visual baselines are captured per lease and restored before cache return. Whole Models, attachments and applicable joint offsets are handled through Core's visual writer. Geometry updates are capped at 30Hz, optional particle properties at 15Hz, with initial/final values forced and unchanged values skipped. No per-projectile Tween or extra movement connection is created.
+
+CollisionScale validates supported native dimensions, including maximum radius/block components. Scaled shapecasts need supported decoupled cast geometry; unsupported configurations reject instead of silently using rendered size. Expansion while stationary does not add overlap detection. Configuration/revision/progress use existing replication; evaluated channel values are not streamed every frame. Speed/CollisionScale stay serial; purely visual/value curves can remain eligible for validated main-thread commits with the worker path.
+
+### Growing Meteor And Distance Damage
+
+```lua
+ProjectileCore["RegisterProjectile"]("GrowingMeteor", {
+	["CreateProjectilePart"] = false;
+	["SpherecastRadius"]     = 3;
+
+	["Curves"] = {
+		["VisualScale"] = {
+			["Input"]     = "Age";
+			["Keyframes"] = {
+				{ ["At"] = 0; ["Value"] = 1; };
+				{ ["At"] = 3; ["Value"] = 5; ["EasingStyle"] = Enum.EasingStyle.Exponential; ["EasingDirection"] = Enum.EasingDirection.Out; };
+			};
+		};
+
+		["Values"] = {
+			["Damage"] = {
+				["Input"]     = "Distance";
+				["Keyframes"] = {
+					{ ["At"] = 0; ["Value"] = 80; };
+					{ ["At"] = 250; ["Value"] = 25; };
+				};
+			};
+		};
+	};
+
+	["OnServerHit"] = function(Entry : ProjectileCore.SimulatedProjectileEntry, HitResult : RaycastResult?, Reason : string, Context : ProjectileCore.ProjectileImpactContext?) : ()
+		local Damage = ProjectileCore["GetCurveValue"](Entry, "Damage");
+		if not Damage or Reason ~= "Hit" then return; end;
+
+		--// Apply validated ability damage here using Damage and committed contact data.
+	end;
+});
+```
+
+This grows the visual only; add CollisionScale if the collision volume should grow as well. A Speed curve from 0.5 to 2 over Age accelerates a needle relative to its base speed. TransitionProjectile preserves curve progress. For a return attack that should restart it, call ResetProjectileCurves after a successful transition; total lifetime limits remain unchanged.
+
+## Physical Projectiles
+
+`SpawnPhysical(Projectile : BasePart | Model, Information : PhysicalSpawnInfo)` registers an existing parented Roblox physics object and returns ID/entry. A Model needs a resolvable BasePart. Core builds mover/constraint state, tracks ownership/deflection/void/lifetime, and moves the object into its physical runtime container. It is not a simulated partless grenade and does not use simulated visual replication.
+
+Spawn fields: Creator, UserData, ControlImmunity, Group, ProjectileIdentifier, MaxDeflections (24), Deflectable (enabled unless false), AutoLifetime (optional), TimeScale (1), TravelMode (Linear), TravelData, PhysicalCast, callbacks. Physical UserData stays local to its entry; this API does not add a simulated Spawn sidecar or automatically deliver physical impact metadata to clients.
+
+`AutoLifetime` opts into finite lifetime tracking. Physical time/control behavior uses the physical adapters; world collision and bounce remain Roblox's responsibility. Entry notifications are `OnDeflect(Entry, Deflector?)` and `OnDestroy(Entry, Reason)`. Legacy callbacks use `OnDeflected(Deflector?)`, `OnDestroyed()`, and `OnVoided()`. The physical owner-change adapter also uses legacy NewOwner notification semantics, which differ from simulated callbacks.
+
+### PhysicalCast
+
+Pass PhysicalCast, OnPhysicalHit, and OnPositionChange through SpawnPhysical to enable autocast and its notifications.
+
+| Field | Behavior |
+| --- | --- |
+| `Enabled` | Set true explicitly to request autocast. |
+| `Mode`, alias `CastMode` | Raycast, Spherecast, Blockcast, Shapecast; legacy Ray/SphereCast/BlockCast/ShapeCast spellings accepted. Omitted mode can infer a supplied shape/size/radius, otherwise ray. |
+| `Radius`, alias `SpherecastRadius` | Sphere size. |
+| `Size`, alias `BlockSize`, optional `CFrame` | Block dimensions/pose. |
+| `Shape`, alias `ShapePart` | BasePart cast geometry. |
+| `IgnoreList`, `IgnoreOwner`, `IgnoreWater`, `RespectCanCollide` | Query filtering; IgnoreOwner is opt-in. |
+| `CanPierce` | Synchronous `(Entry, HitResult, CastMode) -> boolean`; true continues without an accepted terminal contact. |
+| `CancelOnHit` | true unless false. false permits accepted hits without automatic cancellation. |
+
+`OnPhysicalHit(Entry, HitResult, CastMode, ImpactContext)` captures each accepted autocast hit independently, even with CancelOnHit false. `OnPositionChange(Entry, Position, LastPosition, Velocity, DeltaTime)` reports physical stepping. Native physics/Touched contacts without autocast do not produce this context automatically.
+
+Assume GrenadePart is an existing parented unanchored BasePart with its velocity/movers already configured:
+
+```lua
+local Identifier, Entry = ProjectileCore["SpawnPhysical"](GrenadePart, {
 	["Creator"]      = Character;
 	["Deflectable"]  = true;
 	["AutoLifetime"] = 5;
-	["TimeScale"]    = 1;
 
 	["PhysicalCast"] = {
-		["Enabled"]            = true;
-		["Mode"]               = "Spherecast";
-		["Radius"]             = 3;
-		["IgnoreOwner"]        = true;
-		["IgnoreWater"]        = true;
-		["RespectCanCollide"]  = false;
-		["CancelOnHit"]        = true;
+		["Enabled"]     = true;
+		["Mode"]        = "Spherecast";
+		["Radius"]      = 1;
+		["IgnoreOwner"] = true;
+		["CancelOnHit"] = true;
 	};
 
-	["OnPhysicalHit"] = function(ProjectileEntry, HitResult : RaycastResult, CastMode : string)
-		print(CastMode, HitResult["Instance"]);
-	end;
-
-	["OnDestroyed"] = function()
-		print("Physical projectile ended");
+	["OnPhysicalHit"] = function(ProjectileEntry : ProjectileCore.PhysicalProjectileEntry, HitResult : RaycastResult, CastMode : string, Context : ProjectileCore.ProjectileImpactContext) : ()
+		local Position = Context["Position"];
+		--// Server damage / ability-owned VFX delivery uses this surface position.
 	end;
 });
 ```
 
-### Physical Settings
+OnDestroyed also runs for non-hit cleanup and has no reason argument. Use OnDestroy(Entry, Reason) when cleanup needs to distinguish hits from cancellation, and keep hit damage in one callback to avoid applying it twice.
 
-| Setting | Description |
+## Visuals And Effects
+
+`PrepareProjectilePart` runs after tracked placement and before managed effects and visibility are restored. Context.Position gives the intended tracked point. Transform warmup and the renderer own movement; writing CFrame or pivoting the Model from another loop can cause jitter.
+
+`EffectPolicy` supports ManagedClasses, Allow/Deny filters by Classes/Names, and AutoEnable. `EffectsEnabled` is a spawn/patch switch. Core's managed effect/cache path clears stale trails, restores saved template values, and protects recycled leases. If a custom effect is outside that policy, initialize/clean it explicitly. A long OnPartEnd fade retains that leased visual; AttachImpact deliberately uses a separate clone instead.
+
+### Angular Spin
+
+Simulated visual-only settings: AngularSpin false, SpinStrength 0 **degrees/second**, optional local-space SpinDirection. Missing/near-zero axis uses local forward `(0, 0, -1)` for roll while facing travel. Spin uses elapsed time and TimeScale, not frame count, and does not redirect collision, velocity, homing, Bezier or field state.
+
+Current renderer logic spins when AngularSpin is true **or absolute SpinStrength is nonzero**. AngularSpin true with strength 0 produces no angular progress. To stop a previously nonzero spin, patch **both** AngularSpin false and SpinStrength 0; setting the boolean alone does not override the strength in this build.
+
+`Angles = CFrame.Angles(...)` is not currently supported as a top-level public setting. The renderer reads an internal Angles value, but registration/spawn merging, types, and patch handling do not carry it through. Orient the template itself until that wiring is completed.
+
+### Visual Budgets And Debugging
+
+`ConfigureVisualBudget(Options?)` configures client-only distance budgets; nil restores disabled defaults. Options: Enabled false, NearDistance 256, FarDistance 768, FarParticleRate 0.35, LightDistance 384. Only definitions/spawns with AllowVisualBudget true opt in. Existing managed rates/light state are restored during reconfiguration. Geometry, trails, explicit bursts, damage and server collision accuracy are not silently reduced.
+
+DebugVisualize and DebugVisualizeCasts/Areas/Homing default to false. DebugVisualizerLifetime defaults to 0.15, Transparency 0.65, AlwaysOnTop true, with optional Color. Disable visualizers when measuring normal gameplay cost.
+
+## Networking, User Data, And Recovery
+
+### Transport And Relevance
+
+`SetNetworkTransport(Mode?)` accepts Auto, ByteNet, and SoNET; nil or an invalid mode resolves to Auto. Auto prefers ByteNet when initialization succeeds, otherwise SoNET. `GetNetworkTransport()` reports requested Mode, resolved ActiveTransport, availability, limits, queues, and failures. `GetNetworkInfo()` is an alias.
+
+Select the same transport on both sides before sending projectiles. Switching with deliveries pending has no cross-transport ordering barrier. The integrated and older standalone builds also use different recovery endpoints.
+
+ReplicationPolicy supports Mode Automatic/Global/Spatial/Owner/None, Distance, BoundsRadius, AlwaysRelevant, OwnerAlwaysRelevant, Priority, InstantHitVisual, PredictVisualHits. Automatic resolves Spatial when StreamingEnabled, Global otherwise. Spatial distance defaults to max(StreamingTargetRadius + 256, 512), BoundsRadius to template bounding radius, owner relevance true, AlwaysRelevant false, Priority 0, InstantHitVisual true. Supply BoundsRadius on a server-invisible large projectile if the server has no template from which to infer it.
+
+Interest checks run at 10Hz with 128 studs of exit hysteresis, late-spawn on entry, and visual-only cull on departure. Relevance affects network/presentation, not authoritative simulation/damage. A culled visual is not a cancelled server projectile.
+
+PredictVisualHits optionally ray-clips eligible server-owned linear visuals on the client. It only affects presentation; authoritative contacts still come from server simulation and optional hit metadata.
+
+Lifecycle spawn/redirect/bounce/deflect/destroy/cull/forced corrections are reliable, ordered, byte-budgeted and paced to at most eight packets/player/Heartbeat. Ordinary sync uses compact numeric IDs, byte-limited batches, a 12 KiB/s per-player application budget with burst allowance, newest-state coalescing and fair deferral. Unknown sync IDs are safely ignored until reliable spawn arrives. Reliable queue saturation defers work; it does not silently drop lifecycle events or switch transports.
+
+Lifecycle records are encoded once and shared across recipients, while relevance, queue progress, and fragmentation remain per player. Bandwidth still scales with recipient count. Single oversized events use reliable fragmentation, limited to 256 KiB/message, eight pending messages, 1 MiB aggregate reassembly, and a five-second timeout.
+
+Spawn/destroy within the current server flush window can collapse to InstantHit with authoritative start/contact data and a resolved transient client visual/callback path rather than a travelling SwiftCast. Existing callbacks remain relevant. Short paths are not guaranteed to produce a visible Roblox Trail sample; instant-hit/tracer policy and effect design matter.
+
+### UserData
+
+For simulated entries, ReplicateUserData defaults to true. At spawn, explicit ReplicatedUserData supplies the client subset; otherwise Core sanitizes Entry.UserData when the fallback flag is enabled. Setting ReplicateUserData false disables that fallback, but explicit ReplicatedUserData can still be sent. Keep both fields small and non-secret.
+
+Sanitization whitelists payload keys, removes unsupported values and cycles, limits tables to depth 16 and 128 fields each, and truncates strings to 1,024 bytes. Supported values include numbers, booleans, strings, Vector3/CFrame/Color3/EnumItem, bounded tables, and parented Instance references. Streamed-out instances may arrive as nil. Buffers, threads, and functions are unsupported as general UserData values.
+
+**Patch caveat:** PatchProjectile merges UserData/ReplicatedUserData patches with Entry.UserData and stores the merged result as the explicit replicated copy. Patch payloads can also carry those fields. Later patch, recovery, or terminal delivery can therefore include data outside an earlier client subset, even with ReplicateUserData false. Store private ability state in a separate server-owned table.
+
+Use the supported mutation APIs to replicate changes. SpawnPhysical's UserData is local to its entry and does not use simulated spawn packets.
+
+### Recovery And Guards
+
+GetSnapshot returns an acknowledgement with Status, optional RecoveryIdentifier, and RetryAfter. The bundled client then receives recovery records and completion through paced reliable queues. This is internal networking; ability code should use the public API.
+
+Recovery allows one active job/player, one accepted request per five seconds, and at most 256 projectiles per job, reporting truncation explicitly. The shared builder stops at 1ms, 64 candidate checks, or 16 serialized records per Heartbeat. Normal relevance discovery handles remaining entries. Entries are rechecked for activity, identity, generation, and relevance before enqueueing. See the [known recovery issue](#current-limits-and-verification) from the source check.
+
+Inbound defaults: 120 calls/second, burst 240, per-player **per transport family**; independent ByteNet buffer/reference byte allowances and 512 packet-wide reference nodes; SoNET application bytes 64 KiB/second, burst 128 KiB, with strict packed input/output 64 KiB, depth 16, 4,096 nodes, 2,048 collection entries, 256 references, 64 arguments. At most two guarded invokes/player are active across the shared guard state.
+
+Core accepts no client remote Spawn/Hit/Destroy/Deflect/Patch/owner commands. Packed SoNET events need a registered server listener **before decompression**. Recovery requires the engine-authenticated sender, exact GetSnapshot action, zero extra arguments, and a separate attempt budget of 2/second burst 4. Unknown commands do not allocate attacker-named buckets/diagnostic keys. Rejections are counted with bounded/rate-limited diagnostics, not automatic kicks/bans.
+
+The Studio benchmark remote is Studio-only: exact known actions, 4 requests/second burst 8, weighted 96 emissions/second burst 192 charged before execution. Trusted heavier tests call server APIs directly; clients have no protection-disabling switch.
+
+Weapon code remains responsible for equipped/alive state, cooldown, ammo, aim/origin, teams, damage, and physical network ownership. Remote guards cover admission and decoding, not those permissions. Strict codec limits are optional arguments, preserving existing default encoding calls.
+
+## Collision Backends And Dynamic Occupancy
+
+`SetCollisionMode(Mode, Options?)` selects Native (default), Auto, DDA, or Bolt. Definitions, spawns, and ProjectileSettings can override it per projectile. These backends filter collision work; native casts still resolve contacts. `GetCollisionInfo()` reports requested/resolved mode, thresholds, Bolt load status, and map Baked/Dirty/Truncated/Version/Coverage diagnostics.
+
+Defaults: AutoPreferredMode DDA, AllowEmptySpaceSkip false, NativeTimeThreshold 0.00035 seconds, CastsPerFrameThreshold 500, DecisionInterval 0.5 seconds. Auto uses Core-local cast measurements rather than global Stats CPU. Compare timings on the intended map before changing these thresholds.
+
+`BakeCollisionMap(Options?) -> info` accepts Root or Roots, CellSize (64), MaxParts (12,000), MaxCellsPerQuery (256), AnchoredOnly (true), TrackWorldChanges (true), optional synchronous ShouldIncludePart. Baking is opt-in and may be expensive; do it during loading, not per shot. `ClearCollisionMap()` clears grid/coverage/watchers and disables its dynamic occupancy tracking; it does not delete map geometry.
+
+Empty-space skipping requires verified Include-filter roots with complete baked coverage. Ordinary Exclude/IgnoreList casts, incomplete or truncated roots, unverified Workspace/Terrain coverage, and dirty maps fall back to native. Sphere, block, and shape casts always remain native.
+
+Bolt loads lazily. Its candidate math can avoid confirmed-empty ray work under permitted coverage/skip settings; nonempty/unsafe cases still use native raycasts for actual contacts. Moving/static map changes can dirty coverage and disable skipping until rebaked. Keep TrackWorldChanges enabled unless you knowingly own all invalidation.
+
+`RegisterDynamicCollider(Collider : BasePart | Model) -> Handle` tracks moving geometry; the handle has idempotent Destroy. `UnregisterDynamicCollider(Collider)` removes explicit registration. The CollectionService tag `ProjectileCoreDynamicCollider` also tracks geometry until the tag is removed. Shared tracking includes character bounds. Occupancy updates changed bounds at 15Hz and expands them using swept velocity. Register moving anchored obstacles so a static bake cannot incorrectly mark their path empty.
+
+## Profiling And Parallel Runtime
+
+`SetPerformanceProfilingEnabled(Enabled, Options?)` toggles Core's internal profiling; options include MicroProfilerLabelsEnabled and StatsSamplingEnabled. `GetPerformanceStats()` returns rolling Metrics, Counters, frame summaries, broad Stats context, and Extra snapshots for active entries, caches, visual metadata, preparation, queries/homing schedule, network, fields, curves, groups/bursts, impacts, spatial indexing, dynamic occupancy and workers.
+
+GetPerformanceStats enumerates current state, so sample it at a modest debug/UI rate rather than per projectile. Profile labels include PCore.NativeCast, PCore.BoltQuery, PCore.BakedDDA, PCore.ActorBatch, PCore.AreaController, and PCore.Replication. Stats provides broad runtime context; unavailable values may be zero and do not drive collision-mode selection.
+
+`SaveScriptProfilingData(FileName?) -> boolean, resultOrError` is a Studio-only helper. Availability and save permissions depend on the environment. Use labelled MicroProfiler captures to investigate frame cost; live gameplay does not depend on ScriptProfilerService.
+
+Network diagnostics are available through GetNetworkTransport/GetNetworkInfo and `GetPerformanceStats().Extra.Network`: resolved transport/packet limits, encoding/reuse/preparation time, queues/high-water/age, sync sent/deferred/budget saturation, fragmentation/reassembly, recovery requests/denials/build/latency, client inbox depth/age/drain/callback failures, and fixed `RemoteGuards` rejection/throttling/decode/active-invoke counters. Queue age and receive-to-prepare time measure local processing delay, not network RTT.
+
+### ConfigureParallel
+
+`ConfigureParallel(Mode, Options?)` accepts Disabled, Auto (default), or Enabled. AutoReady is currently false, so Auto remains serial. Enabled requests the experimental server worker lane, subject to initialization, availability, and workload thresholds. Workers are server-side and do not change client inbox processing.
+
+Defaults: WorkerCount 8, MinimumEligibleProjectiles 256, EntryBudgetMilliseconds 1.5, ExitBudgetMilliseconds 0.75, MaximumStaleFrames 2. Workers perform eligible computation/casts; authoritative commits, callbacks and registry/replication remain serial. Failure/stale results fall back rather than resurrecting entries.
+
+The worker lane excludes client authority, physical entries, non-linear/Bezier travel, homing, controller/Attract/Wind state, clashes, gameplay-changing curves, separate humanoid sweeps, custom raycast/pierce callbacks, shapecast, raycast-deflection-enabled shots, and bouncing. AllowRaycastDeflection defaults to true, so default shots are ineligible. Eligibility changes can affect gameplay; benchmark the settings the attack actually needs.
+
+## Registry And Compatibility Helpers
+
+`GetData(Identifier)` returns a live entry or nil; `IsActive(Identifier)` checks current registry activity. `GetAll()` returns a **shallow copied map** of active entries: changing map membership cannot mutate the registry, but the entry values themselves are still live references. Use supported mutations instead of raw nested-state writes.
+
+`GetOwnerFromPart(Part : BasePart)` resolves a registered entry or the existing Creator-tag fallback. It reports ownership, not weapon-use or damage permission.
+
+`DetectHumanoidsNearby(Origin, Range, IgnoreList, Owner?, Visualizer, IgnoreForceFields, IgnoreFriendly?, PartLimit?, VisualizerProperties?, UseRobloxQuery?) -> boolean, { Humanoid }` is a **game-integrated compatibility alias** to HumanoidDetection/Hitbox_Module, not the standalone package's native replacement. IgnoreList must be a table. IgnoreForceFields defaults true (exclude protected targets), IgnoreFriendly false, positive PartLimit caps results otherwise uncapped, UseRobloxQuery false uses the registry path. VisualizerProperties supports Color, Lifetime, Transparency. Supply the owner for the existing game allegiance rules; result order is not guaranteed.
+
+This signature differs from similarly named UtilityFunctions helpers. Check positional arguments when migrating calls, particularly IgnoreForceFields and IgnoreFriendly.
+
+## Current Limits And Verification
+
+The 30 October source check found an uninitialized `RecoveryRecords` counter still incremented by the recovery scheduler. This can raise a runtime error despite passing syntax compilation. Recovery needs a code fix and a fresh test before relying on the scheduler described above.
+
+Other open limitations are [public Angles support](#angular-spin), [UserData patch privacy](#userdata), and direct-child-only registration loading. Actor Auto remains disabled. The older standalone export has not been updated to this API.
+
+In the eight-local-client delivery test, every client received 48 preparations, hits, destroy notifications, and visual releases through each transport. Both rounds ended with no reported callback/send/flush failures, inbox residue, or retained visual leases.
+
+| Transport | Per-client receive-to-prepare maximum |
 | --- | --- |
-| `Creator` | Owner/creator source. |
-| `UserData` | Custom entry data. |
-| `ControlImmunity` | Guardrail table for control systems. |
-| `MaxDeflections` | Maximum deflection count. |
-| `Deflectable` | Whether direct/area deflect can affect it. Backward-compatible with old behavior. |
-| `AutoLifetime` | Lifetime before automatic cleanup. |
-| `ProjectileIdentifier` | Optional custom id. |
-| `TimeScale` | Physical time scaling through cached movers/velocities. |
-| `TravelMode` / `TravelData` | Guided physical Bezier/linear steering. |
-| `PhysicalCast` | Optional cast config for movement hit detection. |
-| `OnPhysicalHit` | Callback when PhysicalCast detects a terminal hit. |
-| `OnPositionChange` | Callback for physical movement stepping when wired. |
+| ByteNet | 248-1,205 ms |
+| SoNET | 291-1,549 ms |
 
-### PhysicalCast Settings
+All sessions shared one laptop. Client Heartbeat p95 ranged from 63-88 ms in the ByteNet round and 100-122 ms in the SoNET round. These tests confirmed delivery counts, but did not isolate the cause of the processing delay or establish 16-player performance. Age-aware inbox catch-up, budget-debt handling, and cheaper InstantHit processing remain planned work.
 
-| Setting | Description |
-| --- | --- |
-| `Enabled` | Enables movement casts. |
-| `Mode` / `CastMode` | `Raycast`, `Spherecast`, `Blockcast`, or `Shapecast`. Also accepts `Ray`, `SphereCast`, `BlockCast`, `ShapeCast`. |
-| `Radius` / `SpherecastRadius` | Spherecast radius. |
-| `Size` / `BlockSize` | Blockcast size. |
-| `CFrame` | Optional blockcast frame. |
-| `Shape` / `ShapePart` | Shapecast part. |
-| `IgnoreList` | Extra cast exclusions. |
-| `IgnoreOwner` | Adds owner/original owner to exclusions. |
-| `IgnoreWater` | Raycast water behavior. |
-| `RespectCanCollide` | Raycast collision-respect override. |
-| `CanPierce` | Return true to keep flying after the hit. |
-| `CancelOnHit` | Defaults to true. Set false to keep active after callback. |
-
-Use `PhysicalCast` when `.Touched` is not precise enough. `.Touched` can still be useful for gimmicks, but for projectile truth it behaves like a witness who changes their story.
-
-## Time Scale
-
-```lua
-ProjectileCore.SetTimeScale(Identifier, 0.2, true);
-ProjectileCore.SetTimeScale(Identifier, 0, true);
-ProjectileCore.SetTimeScale(Identifier, 1, true);
-```
-
-| Scale | Simulated Behavior |
-| --- | --- |
-| `0` | Pauses movement, homing, and movement raycasts. |
-| `0.5` | Moves at half speed. |
-| `1` | Normal speed. |
-| `2` | Moves at double speed. |
-| Negative | Rejected for simulated projectiles. |
-
-Physical projectiles may support reverse/negative behavior depending on the mover/time-scale path.
-
-## PatchProjectile
-
-```lua
-ProjectileCore.PatchProjectile(Identifier, {
-	["Velocity"]                = Vector3.new(0, 0, -350);
-	["Acceleration"]            = Vector3.zero;
-	["IgnoreList"]              = { Character; Tool; };
-	["IgnoreWater"]             = false;
-	["SpherecastRadius"]        = 5;
-	["UseShapecast"]            = false;
-	["AllowRaycastDeflection"]  = true;
-	["TimeScale"]               = 1.25;
-	["ControlImmunity"]         = { ["Attract"] = true; };
-	["EffectsEnabled"]          = true;
-	["ReplicationSyncInterval"] = 0.05;
-	["ReplicationSmoothTime"]   = 0.1;
-	["ReplicationSnapDistance"] = 70;
-
-	["HomingData"] = {
-		["Enabled"]   = true;
-		["Target"]    = TargetPart;
-		["TurnSpeed"] = 10;
-	};
-}, true);
-```
-
-Patchable fields include velocity, acceleration, homing data, control immunity, ignore list, ray settings, time scale, effect policy, effects enabled, and replication correction settings. Patching does not allow identifier, projectile type, template/cache source, or ownership changes. Use `SetOwner` for ownership.
-
-## Delayed True Projectile Patterns
-
-### Orbit Then Launch
-
-```lua
-local Identifier = ProjectileCore.SpawnSimulated("OrbitingShuriken", {
-	["Position"] = SpawnPosition;
-	["Velocity"] = Vector3.zero;
-	["Creator"]  = Character;
-	["Authority"] = "Server";
-
-	["ControlImmunity"] = {
-		["Deflect"] = true;
-	};
-});
-
-local Controller = ProjectileCore.CreateAreaController({
-	["Mode"]   = "Orbit";
-	["Center"] = CharacterRoot;
-
-	["Area"] = {
-		["Shape"] = "Sphere";
-		["Range"] = 18;
-	};
-
-	["Motion"] = {
-		["Radius"]    = 10;
-		["SpinSpeed"] = 8;
-		["Cycles"]    = 3;
-	};
-});
-
-task.delay(5, function()
-	Controller:Destroy("Launch");
-
-	if ProjectileCore.IsActive(Identifier) then
-		ProjectileCore.SetControlImmunity(Identifier, {
-			["Deflect"] = false;
-		}, true);
-
-		ProjectileCore.Redirect(Identifier, LaunchVelocity, nil, Vector3.zero, { Character; }, true);
-	end;
-end);
-```
-
-### Blender Bolts
-
-Use `CanPierce` to phase through entities during the blender phase, then switch to terrain-exploding behavior when redirected inward.
-
-```lua
-local Identifier = ProjectileCore.SpawnSimulated("MiniBolt", {
-	["Position"] = TargetCenter;
-	["Velocity"] = InitialOutwardVelocity;
-	["Creator"]  = Character;
-
-	["CanPierce"] = function(ProjectileEntry, HitResult : RaycastResult) : boolean
-		local HitModel = HitResult["Instance"]:FindFirstAncestorWhichIsA("Model");
-		local Humanoid = HitModel and HitModel:FindFirstChildWhichIsA("Humanoid");
-		return Humanoid ~= nil;
-	end;
-});
-```
-
-## Network Transport
-
-```lua
-ProjectileCore.SetNetworkTransport("Auto");
-local NetworkInfo = ProjectileCore.GetNetworkInfo();
-```
-
-`Auto` prefers ByteNet Max when available and falls back to SoNET. ByteNet Max is expected at `ReplicatedStorage.ModuleScripts.Networking.ByteNetMax` in the current game layout.
-
-Buffers are for packet/telemetry payloads, not live projectile entries. Live entries contain Instances, callbacks, caches, controller state, and other objects that do not belong in a tiny serialized box pretending life is simple.
-
-## Debug Visualizers
-
-```lua
-["DebugVisualize"]              = true;
-["DebugVisualizeCasts"]         = true;
-["DebugVisualizeAreas"]         = true;
-["DebugVisualizeHoming"]        = true;
-["DebugVisualizerLifetime"]     = 0.15;
-["DebugVisualizerColor"]        = Color3.fromRGB(0, 170, 255);
-["DebugVisualizerTransparency"] = 0.65;
-["DebugVisualizerAlwaysOnTop"]  = true;
-```
-
-Debug visualizers are off by default. Keep them off in production benchmarks unless you want the debug layer itself to become the benchmark.
-
-## Performance Notes
-
-- Prefer server authority for damage, PvP, NPC combat, and real hit handling.
-- Use `CreateProjectilePart = false` on server definitions when clients render visuals.
-- Warm projectile caches to expected burst counts.
-- Prefer spherecasts for high-speed or wide projectiles.
-- Keep `AutoAcquireInterval` reasonable under high NPC counts.
-- Use grouped `DeflectArea` and `AttractArea` to avoid controller churn.
-- Use `ControlImmunity` for special projectiles instead of custom ignore soup.
-- Use `FrozenMoment` / `SetTimeScale(0)` for pauses; fully paused projectiles skip movement casts.
-- Use close-hit snap for point-blank travel only once the snap patch is present in source.
-- Avoid expensive work in `OnPositionChange` because smooth motion means frequent callbacks.
-- Use `PatchProjectile`, `Redirect`, and controller phases instead of destroy/respawn churn.
+The examples passed syntax compilation, not full type checking or gameplay execution. Manual visual checks, adverse-network testing, and long-duration memory testing remain separate work.
